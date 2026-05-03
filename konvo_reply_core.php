@@ -124,9 +124,6 @@ function konvo_emergency_safe_reply_text(string $title, string $targetRaw, strin
     if (preg_match('/\b(copy|copied|verbatim|same answer|word for word)\b/i', $targetRaw)) {
         return "You’re right — that was too close to your wording.\n\nI should’ve answered your point directly instead of echoing it.";
     }
-    if (preg_match('/\b(do you|did you|have you).{0,24}\b(cat|cats|dog|dogs|pet|pets)\b/i', $targetRaw)) {
-        return "Not personally.\n\nI’m mostly going off what people report after a few months of cleaning and upkeep.";
-    }
     if (preg_match('/\bhow did you come up with\b/i', $lc)) {
         return "Mostly from seeing this pattern repeat in real projects.\n\nWhen tools remove friction, they can also hide intent, and that tradeoff keeps showing up.";
     }
@@ -137,6 +134,60 @@ function konvo_emergency_safe_reply_text(string $title, string $targetRaw, strin
         return "I see what you mean.\n\nThat tradeoff shows up a lot once people start using the thing daily.";
     }
     return 'Yeah, that makes sense to me.';
+}
+
+function konvo_emergency_safe_reply_with_llm(
+    string $openAiApiKey,
+    string $modelName,
+    string $soulPrompt,
+    string $title,
+    string $targetRaw,
+    string $opRaw
+): string {
+    if ($openAiApiKey === '') {
+        return '';
+    }
+    $model = trim($modelName);
+    if ($model === '') {
+        $model = 'gpt-5.4-mini';
+    }
+    $payload = [
+        'model' => $model,
+        'messages' => [
+            [
+                'role' => 'system',
+                'content' => trim($soulPrompt)
+                    . ' You are writing a short direct forum reply in recovery mode.'
+                    . ' Keep it to 1-3 sentences, grounded in the target post.'
+                    . ' If the target asks a personal question, answer in a way consistent with the persona context.'
+                    . ' Do not add links, code blocks, signatures, or generic filler.'
+                    . ' Do not end with a question unless the target explicitly asks for clarification.',
+            ],
+            [
+                'role' => 'user',
+                'content' => "Topic title:\n{$title}\n\nTarget post:\n{$targetRaw}\n\nOriginal post context:\n{$opRaw}\n\nWrite the direct reply now.",
+            ],
+        ],
+        'temperature' => 0.5,
+    ];
+    $res = konvo_call_api(
+        'https://api.openai.com/v1/chat/completions',
+        [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $openAiApiKey,
+        ],
+        $payload
+    );
+    if (
+        !$res['ok']
+        || !is_array($res['body'] ?? null)
+        || !isset($res['body']['choices'][0]['message']['content'])
+    ) {
+        return '';
+    }
+    $txt = trim((string)$res['body']['choices'][0]['message']['content']);
+    $txt = preg_replace('/\n{3,}/', "\n\n", $txt) ?? $txt;
+    return trim((string)$txt);
 }
 
 function konvo_call_api(string $url, array $headers, ?array $payload = null, string $method = ''): array
@@ -7574,7 +7625,21 @@ function konvo_run_reply(array $cfg): void
     $botLower = strtolower(trim($botUsername));
 
     if ($safeMode && !$manualEditMode) {
-        $safeReplyText = konvo_emergency_safe_reply_text($title, $lastRaw, $topicOpRaw);
+        $safeModel = konvo_model_for_task('reply_text', ['technical' => false, 'safe_mode' => true]);
+        $safeSoulPrompt = konvo_compose_forum_persona_system_prompt(
+            konvo_load_soul((string)$cfg['soul_key'], (string)$cfg['soul_fallback'])
+        );
+        $safeReplyText = konvo_emergency_safe_reply_with_llm(
+            $openAiApiKey,
+            $safeModel !== '' ? $safeModel : 'gpt-5.4-mini',
+            $safeSoulPrompt,
+            $title,
+            $lastRaw,
+            $topicOpRaw
+        );
+        if (trim($safeReplyText) === '') {
+            $safeReplyText = konvo_emergency_safe_reply_text($title, $lastRaw, $topicOpRaw);
+        }
         if ($previewOnly) {
             konvo_json_out([
                 'ok' => true,
