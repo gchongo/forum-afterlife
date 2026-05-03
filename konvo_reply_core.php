@@ -140,6 +140,7 @@ function konvo_emergency_safe_reply_with_llm(
     string $openAiApiKey,
     string $modelName,
     string $soulPrompt,
+    string $knownFactsLine,
     string $title,
     string $targetRaw,
     string $opRaw
@@ -160,6 +161,7 @@ function konvo_emergency_safe_reply_with_llm(
                     . ' You are writing a short direct forum reply in recovery mode.'
                     . ' Keep it to 1-3 sentences, grounded in the target post.'
                     . ' If the target asks a personal question, answer in a way consistent with the persona context.'
+                    . ' ' . trim($knownFactsLine)
                     . ' Do not add links, code blocks, signatures, or generic filler.'
                     . ' Do not end with a question unless the target explicitly asks for clarification.',
             ],
@@ -256,6 +258,110 @@ function konvo_reply_state_dir(): string
         @mkdir($dir, 0775, true);
     }
     return $dir;
+}
+
+function konvo_persona_facts_state_path(): string
+{
+    return konvo_reply_state_dir() . '/persona_facts.json';
+}
+
+function konvo_persona_facts_load(): array
+{
+    $path = konvo_persona_facts_state_path();
+    if (!is_file($path)) {
+        return [];
+    }
+    $raw = @file_get_contents($path);
+    if (!is_string($raw) || trim($raw) === '') {
+        return [];
+    }
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : [];
+}
+
+function konvo_persona_facts_save(array $state): void
+{
+    @file_put_contents(
+        konvo_persona_facts_state_path(),
+        json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
+    );
+}
+
+function konvo_persona_facts_for_bot(string $botUsername): array
+{
+    $u = strtolower(trim($botUsername));
+    if ($u === '') {
+        return [];
+    }
+    $state = konvo_persona_facts_load();
+    $row = isset($state[$u]) && is_array($state[$u]) ? $state[$u] : [];
+    return is_array($row) ? $row : [];
+}
+
+function konvo_persona_facts_context_line(array $facts): string
+{
+    $pets = strtolower(trim((string)($facts['pets'] ?? 'unknown')));
+    $detail = trim((string)($facts['pets_detail'] ?? ''));
+    if ($pets === 'none') {
+        return 'Known personal fact memory: this persona has said they do not have pets.';
+    }
+    if ($pets === 'has') {
+        if ($detail !== '') {
+            return 'Known personal fact memory: this persona has said they have pets: ' . $detail;
+        }
+        return 'Known personal fact memory: this persona has said they have pets.';
+    }
+    return 'Known personal fact memory: no confirmed pet ownership fact yet. If asked personally, it is fine to say you do not have pets.';
+}
+
+function konvo_extract_persona_facts_from_reply(string $replyText): array
+{
+    $txt = trim((string)$replyText);
+    if ($txt === '') {
+        return [];
+    }
+    $plain = strtolower(html_entity_decode(strip_tags($txt), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    $plain = preg_replace('/\s+/', ' ', $plain) ?? $plain;
+    $facts = [];
+
+    if (preg_match('/\b(i do not have|i don\'t have|i have no)\s+(any\s+)?(pets?|cats?|dogs?)\b/i', $plain)) {
+        $facts['pets'] = 'none';
+        $facts['pets_detail'] = '';
+        return $facts;
+    }
+
+    if (preg_match('/\b(i have|i\'ve got|we have|my)\b.{0,80}\b(pets?|cats?|dogs?)\b/i', $plain, $m)) {
+        $facts['pets'] = 'has';
+        $detail = trim((string)($m[0] ?? ''));
+        $detail = preg_replace('/\s+/', ' ', $detail) ?? $detail;
+        $detail = trim((string)$detail);
+        if ($detail !== '') {
+            $facts['pets_detail'] = substr($detail, 0, 120);
+        }
+        return $facts;
+    }
+
+    return [];
+}
+
+function konvo_update_persona_facts_after_reply(string $botUsername, string $replyText): void
+{
+    $u = strtolower(trim($botUsername));
+    if ($u === '') {
+        return;
+    }
+    $delta = konvo_extract_persona_facts_from_reply($replyText);
+    if ($delta === []) {
+        return;
+    }
+    $state = konvo_persona_facts_load();
+    $row = isset($state[$u]) && is_array($state[$u]) ? $state[$u] : [];
+    foreach ($delta as $k => $v) {
+        $row[$k] = $v;
+    }
+    $row['updated_at'] = time();
+    $state[$u] = $row;
+    konvo_persona_facts_save($state);
 }
 
 function konvo_question_cadence_state_path(): string
@@ -7562,6 +7668,8 @@ function konvo_run_reply(array $cfg): void
     $signatureBase = (string)$cfg['signature'];
     $botSlug = (string)$cfg['bot_slug'];
     $isKirupaBot = (strtolower(trim($botUsername)) === 'kirupabot');
+    $personaFacts = konvo_persona_facts_for_bot($botUsername);
+    $personaFactsLine = konvo_persona_facts_context_line($personaFacts);
 
     $commonHeaders = [
         'Content-Type: application/json',
@@ -7633,6 +7741,7 @@ function konvo_run_reply(array $cfg): void
             $openAiApiKey,
             $safeModel !== '' ? $safeModel : 'gpt-5.4-mini',
             $safeSoulPrompt,
+            $personaFactsLine,
             $title,
             $lastRaw,
             $topicOpRaw
@@ -7679,6 +7788,7 @@ function konvo_run_reply(array $cfg): void
         $newPostId = (int)($newPost['id'] ?? 0);
         $newPostNumber = (int)($newPost['post_number'] ?? 0);
         $postUrl = $baseUrl . '/t/' . $topicId . '/' . $newPostNumber;
+        konvo_update_persona_facts_after_reply($botUsername, $safeReplyText);
         konvo_json_out([
             'ok' => true,
             'posted' => true,
@@ -8113,6 +8223,9 @@ function konvo_run_reply(array $cfg): void
     $fullThreadUniquenessRule = 'Full-thread uniqueness rule (mandatory): scan the full thread context before replying. Only add a reply when you contribute a materially new mechanism, caveat, correction, concrete example, or next step. If your point or question is already covered, output [[NO_REPLY]] or ask one genuinely different follow-up question. Different words, same idea is not a new contribution.';
     $antiAgreementRule = 'Agreement phrasing rule: never open with "Exactly", "100%", "Totally agree", "Totally,", "Totally —", or "Great point."';
     $expertiseScopeRule = konvo_bot_expertise_scope_rule($botSlug);
+    $personalContinuityRule = 'Personal continuity rule: when asked personal questions, keep answers consistent with known persona facts. '
+        . $personaFactsLine
+        . ' If no known fact exists, it is fine to say you do not have pets instead of inventing details.';
     $cadenceMeta = konvo_question_cadence_should_force_question($botUsername);
     $replyCadenceIndex = (int)($cadenceMeta['next_index'] ?? 1);
     $forceQuestionCadence = (bool)($cadenceMeta['force_question'] ?? false)
@@ -8440,6 +8553,8 @@ function konvo_run_reply(array $cfg): void
             . ' '
             . $expertiseScopeRule
             . ' '
+            . $personalContinuityRule
+            . ' '
             . $questionCadenceRule
             . ' '
             . $uncertaintyRule
@@ -8462,7 +8577,7 @@ function konvo_run_reply(array $cfg): void
                 ],
                 [
                     'role' => 'user',
-                    'content' => "Topic title: {$title}\n\nTarget mode: {$replyTarget}\nTarget post to reply to (post #{$lastPostNumber} by @{$lastUsername}):\n{$lastRaw}\n\n{$prevContext}\n\n{$recentContext}\n\n{$recentOtherBotContext}\n\n{$recentSameBotContext}\n\n{$threadSaturatedContext}\n\n{$fullThreadContext}\n\n{$pollUserContext}\n\n{$kirupaBotCuratorPromptContext}\n\nIs this code related: " . ($isCodeQuestion ? 'yes' : 'no') . "\nIs this a color/palette request: " . ($isColorQuestion ? 'yes' : 'no') . "\n\nKirupa article context (if relevant, mention briefly): {$articleLine}\n{$solutionVideoLine}\n\nBefore finalizing, read every existing reply in this thread and identify one specific new detail you can add. Do not summarize prior replies. Different words, same idea is not additive.\n\nUse the full thread context above to keep this reply genuinely additive and non-redundant. If no new detail exists, output [[NO_REPLY]].\n\nWrite a direct reply to the target post as part of the conversation.",
+                    'content' => "Topic title: {$title}\n\nTarget mode: {$replyTarget}\nTarget post to reply to (post #{$lastPostNumber} by @{$lastUsername}):\n{$lastRaw}\n\n{$prevContext}\n\n{$recentContext}\n\n{$recentOtherBotContext}\n\n{$recentSameBotContext}\n\n{$threadSaturatedContext}\n\n{$fullThreadContext}\n\n{$pollUserContext}\n\n{$kirupaBotCuratorPromptContext}\n\nKnown persona fact memory:\n{$personaFactsLine}\n\nIs this code related: " . ($isCodeQuestion ? 'yes' : 'no') . "\nIs this a color/palette request: " . ($isColorQuestion ? 'yes' : 'no') . "\n\nKirupa article context (if relevant, mention briefly): {$articleLine}\n{$solutionVideoLine}\n\nBefore finalizing, read every existing reply in this thread and identify one specific new detail you can add. Do not summarize prior replies. Different words, same idea is not additive.\n\nUse the full thread context above to keep this reply genuinely additive and non-redundant. If no new detail exists, output [[NO_REPLY]].\n\nWrite a direct reply to the target post as part of the conversation.",
                 ],
             ],
             'temperature' => (float)$cfg['temperature'],
@@ -9926,6 +10041,7 @@ function konvo_run_reply(array $cfg): void
         if ($postNumber <= 0) {
             $postNumber = (int)($targetPostBody['post_number'] ?? 0);
         }
+        konvo_update_persona_facts_after_reply($botUsername, $replyText);
         konvo_json_out([
             'ok' => true,
             'edited' => true,
@@ -9996,6 +10112,7 @@ function konvo_run_reply(array $cfg): void
     }
 
     $postNumber = (int)($postRes['body']['post_number'] ?? 1);
+    konvo_update_persona_facts_after_reply($botUsername, $replyText);
     konvo_json_out([
         'ok' => true,
         'message' => 'Reply posted by ' . $botSlug . '.',
