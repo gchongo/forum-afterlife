@@ -173,8 +173,19 @@ function casual_pick_bot(array $bots): array
     if ($bots === array()) {
         return array('username' => 'BayMax', 'name' => 'BayMax', 'soul_key' => 'baymax', 'soul_fallback' => 'Write naturally, concise, and human.');
     }
-    shuffle($bots);
-    return $bots[0];
+    $preferred = array(
+        'BayMax', 'MechaPrime', 'yoshiii', 'bobamilk', 'wafflefries',
+        'quelly', 'sora', 'sarah_connor', 'ellen1979', 'arthurdent', 'hariseldon'
+    );
+    $pool = array_values(array_filter($bots, static function (array $bot) use ($preferred): bool {
+        $username = (string)($bot['username'] ?? '');
+        return in_array($username, $preferred, true);
+    }));
+    if ($pool === array()) {
+        $pool = $bots;
+    }
+    shuffle($pool);
+    return $pool[0];
 }
 
 function casual_find_bot(array $bots, string $username): ?array
@@ -213,6 +224,26 @@ function casual_is_design_topic(string $text): bool
         return false;
     }
     return true;
+}
+
+function casual_is_ai_or_tech_topic(string $text): bool
+{
+    $t = strtolower(trim($text));
+    if ($t === '') return false;
+    return (bool)preg_match(
+        '/\b(ai|artificial intelligence|llm|language model|chatbot|agentic|automation|algorithm|technology|tech|software|app|apps|platform|internet|web|browser|interface|interfaces|digital|creative tool|creative tools|productivity tool|workflow|device|devices|screen|screens|online community|social web|human computer|human-computer|machine creativity|generative)\b/i',
+        $t
+    );
+}
+
+function casual_has_depth_signal(string $text): bool
+{
+    $t = strtolower(trim($text));
+    if ($t === '') return false;
+    return (bool)preg_match(
+        '/\b(tradeoff|trade-off|tension|constraint|second-order|side effect|friction|habit|workflow|trust|taste|craft|attention|memory|ownership|signal|meaning|quality|defaults|intuition|identity|abstraction|cost of convenience|creative process|human side)\b/i',
+        $t
+    );
 }
 
 function casual_title_looks_question_like(string $title): bool
@@ -355,7 +386,7 @@ function casual_looks_too_technical(string $text): bool
 {
     $t = strtolower(trim($text));
     if ($t === '') return false;
-    return (bool)preg_match('/\b(javascript|typescript|css|html|react|vue|angular|api|database|backend|frontend|docker|kubernetes|ci\/cd|compiler|runtime|machine learning|neural network|prompt engineering)\b/i', $t);
+    return (bool)preg_match('/\b(javascript|typescript|css|html|react|vue|angular|api endpoint|database schema|backend|frontend|docker|kubernetes|ci\/cd|compiler|runtime|stack trace|queryselector|npm|package\.json|php warning|sql query)\b/i', $t);
 }
 
 function casual_validate_generated_topic(string $title, string $raw): array
@@ -380,6 +411,12 @@ function casual_validate_generated_topic(string $title, string $raw): array
     }
     if (casual_looks_too_technical($title . "\n" . $raw)) {
         return array('ok' => false, 'error' => 'topic looked too technical');
+    }
+    if (!casual_is_design_topic($title . "\n" . $raw) && !casual_is_ai_or_tech_topic($title . "\n" . $raw)) {
+        return array('ok' => false, 'error' => 'topic was outside design/ai/technology focus');
+    }
+    if (!casual_has_depth_signal($title . "\n" . $raw)) {
+        return array('ok' => false, 'error' => 'topic did not show enough depth');
     }
     if (strpos($raw, '```') !== false) {
         return array('ok' => false, 'error' => 'code block not expected for casual topic');
@@ -464,7 +501,7 @@ function casual_pick_category_with_llm(string $title, string $raw, array $bot = 
     $system = 'Classify this forum topic into one category and return JSON only. '
         . 'Schema: {"category":"talk|web_dev|design|gaming","reason":"...","confidence":0.0}. '
         . 'Category rules: '
-        . 'talk = general everyday conversation and broad-interest non-technical discussion. '
+        . 'talk = broad thoughtful discussion about AI, technology, digital life, online communities, or creative tools that is not a coding help thread. '
         . 'web_dev = programming/software engineering/web development/technical architecture in software. '
         . 'design = UI/UX/visual design OR physical architecture/interior design. '
         . 'gaming = video games/gameplay/trailers/game culture. '
@@ -550,22 +587,26 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
     $recentHints = casual_recent_hint_lines($recent);
 
     $strictLine = $strict
-        ? 'Your previous draft was too close to a recent topic, too technical, or not casual enough. Regenerate with a different angle and friendlier everyday vibe.'
+        ? 'Your previous draft was too close to a recent topic, too code-heavy, too shallow, or not thoughtful enough. Regenerate with a different angle and a stronger insight or tradeoff.'
         : 'Generate the best first draft now.';
 
     $system = ($soulPrompt !== '' ? "Bot voice and personality guidance:\n{$soulPrompt}\n\n" : '')
-        . 'You generate a single casual, friendly, non-controversial forum topic starter for humans. '
+        . 'You generate a single thoughtful, conversation-worthy forum topic starter for humans. '
         . 'Return ONLY JSON with this schema: '
         . '{"plan_mood":"...","plan_angle":"...","plan_posting_intent":"...","title":"...","raw":"..."}. '
-        . 'Rules: topic must be everyday and broad-interest, not technical/coding, not newsy, not political, not religious, not divisive, not tragic. '
-        . 'Use natural human language, short and warm. '
-        . 'Title: 5-12 words, complete thought, concise, no colon, no clickbait. '
-        . 'Body: 2-4 short sentences max, conversational, optionally a light prompt. '
-        . 'If asking a question, address the reader as "you". '
+        . 'Rules: topic must be about design, AI, technology, the web, digital culture, software tools, or how people interact with software. '
+        . 'It should feel somewhat profound without sounding academic or robotic. '
+        . 'Anchor the topic around one non-obvious observation, tradeoff, tension, second-order effect, or subtle design/technology insight. '
+        . 'Avoid coding help requests, implementation details, product launch news, politics, religion, rage bait, tragedy, and empty hot takes. '
+        . 'Use natural human language, concise and reflective. '
+        . 'Title: 5-12 words, complete thought, intriguing, no colon, no clickbait, no emoji. '
+        . 'Body: 3-5 short sentences max, ideally split into 2 short paragraphs. Start with the observation, then deepen it. '
+        . 'A closing question is optional only if it feels genuinely earned, not forced. '
         . 'No links, no hashtags, no code blocks. '
         . 'Do not sign the post; Discourse already shows the author username.';
 
-    $user = "Generate one new casual forum topic now.\n"
+    $user = "Generate one new thoughtful forum topic now.\n"
+        . "Desired domains: design, AI, technology, the web, digital culture, creative tools.\n"
         . "Recent topics to avoid repeating:\n{$recentHints}\n\n"
         . $strictLine;
 
