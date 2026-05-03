@@ -170,6 +170,30 @@ function postForm(string $url, array $fields): array
     ];
 }
 
+function postFormWithRetry(string $url, array $fields, int $attempts = 3, int $delayMicros = 350000): array
+{
+    $attempts = max(1, $attempts);
+    $last = ['ok' => false, 'status' => 0, 'error' => 'unattempted', 'raw' => '', 'body' => null, 'attempts' => 0];
+    for ($i = 1; $i <= $attempts; $i++) {
+        $res = postForm($url, $fields);
+        $res['attempts'] = $i;
+        $last = $res;
+        if (!empty($res['ok'])) {
+            return $res;
+        }
+        $status = (int)($res['status'] ?? 0);
+        $err = trim((string)($res['error'] ?? ''));
+        $retryable = ($status === 0 || $status === 429 || $status >= 500 || $err !== '');
+        if (!$retryable || $i >= $attempts) {
+            return $res;
+        }
+        if ($delayMicros > 0) {
+            usleep($delayMicros);
+        }
+    }
+    return $last;
+}
+
 function fetchJson(string $url): ?array
 {
     $ch = curl_init($url);
@@ -443,7 +467,7 @@ if ($isTrackedBotAuthor && $author !== 'kirupabot') {
     if ($looksTechnical && !$alreadyHasKirupaLink) {
         $baseUrl = baseUrlForLocalCalls();
         $url = $baseUrl . '/konvo_kirupabot_reply.php';
-        $res = postForm($url, [
+        $res = postFormWithRetry($url, [
             'topic_id' => (string)$topicId,
             'reply_target' => 'latest',
             'force_reply_to_bot' => '1',
@@ -461,6 +485,7 @@ if ($isTrackedBotAuthor && $author !== 'kirupabot') {
                 'endpoint' => 'konvo_kirupabot_reply.php',
                 'ok' => $res['ok'],
                 'status' => $res['status'],
+                'attempts' => (int)($res['attempts'] ?? 1),
                 'error' => $res['error'],
                 'endpoint_error' => is_array($res['body']) ? (string)($res['body']['error'] ?? '') : '',
                 'post_url' => is_array($res['body']) ? (string)($res['body']['post_url'] ?? '') : '',
@@ -548,13 +573,14 @@ foreach ($toTrigger as $bot => $script) {
     if (isset($triggerMeta[$bot]['force_kirupa_link']) && $triggerMeta[$bot]['force_kirupa_link'] === true) {
         $fields['force_kirupa_link'] = '1';
     }
-    $res = postForm($url, $fields);
+    $res = postFormWithRetry($url, $fields);
     $results[] = [
         'bot' => $bot,
         'endpoint' => $script,
         'response_mode' => (string)($fields['response_mode'] ?? ''),
         'ok' => $res['ok'],
         'status' => $res['status'],
+        'attempts' => (int)($res['attempts'] ?? 1),
         'error' => $res['error'],
         'endpoint_error' => is_array($res['body']) ? (string)($res['body']['error'] ?? '') : '',
         'endpoint_raw' => is_string($res['raw']) ? substr($res['raw'], 0, 220) : '',
