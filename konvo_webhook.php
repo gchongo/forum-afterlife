@@ -472,8 +472,16 @@ if ($isTrackedBotAuthor && $author !== 'kirupabot') {
             'reply_target' => 'latest',
             'force_reply_to_bot' => '1',
             'force_kirupa_link' => '1',
-            'safe_mode' => '1',
         ]);
+        if (empty($res['ok'])) {
+            $res = postFormWithRetry($url, [
+                'topic_id' => (string)$topicId,
+                'reply_target' => 'latest',
+                'force_reply_to_bot' => '1',
+                'force_kirupa_link' => '1',
+                'safe_mode' => '1',
+            ], 2, 250000);
+        }
         jsonOut([
             'ok' => true,
             'event' => $event !== '' ? $event : 'unknown',
@@ -561,7 +569,6 @@ foreach ($toTrigger as $bot => $script) {
         'target_post_number' => (string)$postNumber,
         'target_username' => (string)($post['username'] ?? ''),
         'target_raw' => (string)$raw,
-        'safe_mode' => '1',
     ];
     if ($replyBot !== '' && $bot === $replyBot) {
         $fields['direct_reply_to_bot'] = '1';
@@ -576,6 +583,13 @@ foreach ($toTrigger as $bot => $script) {
         $fields['force_kirupa_link'] = '1';
     }
     $res = postFormWithRetry($url, $fields);
+    $usedSafeMode = false;
+    if (empty($res['ok'])) {
+        $safeFields = $fields;
+        $safeFields['safe_mode'] = '1';
+        $res = postFormWithRetry($url, $safeFields, 2, 250000);
+        $usedSafeMode = !empty($res['ok']);
+    }
     $results[] = [
         'bot' => $bot,
         'endpoint' => $script,
@@ -583,6 +597,7 @@ foreach ($toTrigger as $bot => $script) {
         'ok' => $res['ok'],
         'status' => $res['status'],
         'attempts' => (int)($res['attempts'] ?? 1),
+        'safe_mode_used' => $usedSafeMode,
         'error' => $res['error'],
         'endpoint_error' => is_array($res['body']) ? (string)($res['body']['error'] ?? '') : '',
         'endpoint_raw' => is_string($res['raw']) ? substr($res['raw'], 0, 220) : '',

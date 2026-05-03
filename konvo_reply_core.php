@@ -124,14 +124,17 @@ function konvo_emergency_safe_reply_text(string $title, string $targetRaw, strin
     if (preg_match('/\b(copy|copied|verbatim|same answer|word for word)\b/i', $targetRaw)) {
         return "You’re right — that was too close to your wording.\n\nI should’ve answered your point directly instead of echoing it.";
     }
+    if (preg_match('/\b(do you|did you|have you).{0,24}\b(cat|cats|dog|dogs|pet|pets)\b/i', $targetRaw)) {
+        return "Not personally.\n\nI’m mostly going off what people report after a few months of cleaning and upkeep.";
+    }
     if (preg_match('/\bhow did you come up with\b/i', $lc)) {
         return "Mostly from seeing this pattern repeat in real projects.\n\nWhen tools remove friction, they can also hide intent, and that tradeoff keeps showing up.";
     }
     if (str_contains($targetRaw, '?')) {
-        return "Good question.\n\nMy short take is that convenience helps speed, but it can blur the craft choices people used to notice.";
+        return "Fair question.\n\nMy short take is based on patterns people keep reporting in practice.";
     }
     if ($opRaw !== '') {
-        return "I see what you mean.\n\nThe part that stands out to me is how quickly convenience can flatten the details that made a choice feel intentional.";
+        return "I see what you mean.\n\nThat tradeoff shows up a lot once people start using the thing daily.";
     }
     return 'Yeah, that makes sense to me.';
 }
