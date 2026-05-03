@@ -10,6 +10,47 @@
 
 header('Content-Type: application/json; charset=utf-8');
 
+if (!function_exists('konvo_random_topic_internal_error_out')) {
+    function konvo_random_topic_internal_error_out($message, $status = 500)
+    {
+        if (!headers_sent()) {
+            header('Content-Type: application/json; charset=utf-8');
+            if (function_exists('http_response_code')) {
+                http_response_code((int)$status);
+            }
+        }
+        echo json_encode(array('ok' => false, 'error' => (string)$message), JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+}
+
+set_exception_handler(static function ($e): void {
+    $msg = 'Unhandled exception';
+    $where = 'unknown:0';
+    if (is_object($e)) {
+        if (method_exists($e, 'getMessage')) {
+            $m = trim((string)$e->getMessage());
+            if ($m !== '') $msg = $m;
+        }
+        if (method_exists($e, 'getFile') && method_exists($e, 'getLine')) {
+            $where = basename((string)$e->getFile()) . ':' . (int)$e->getLine();
+        }
+    }
+    konvo_random_topic_internal_error_out('Random topic worker exception: ' . $msg . ' [' . $where . ']', 500);
+});
+
+register_shutdown_function(static function (): void {
+    $err = error_get_last();
+    if (!is_array($err)) return;
+    $fatalTypes = array(E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR);
+    $type = (int)($err['type'] ?? 0);
+    if (!in_array($type, $fatalTypes, true)) return;
+    $msg = trim((string)($err['message'] ?? 'Fatal shutdown error'));
+    $file = basename((string)($err['file'] ?? 'unknown'));
+    $line = (int)($err['line'] ?? 0);
+    konvo_random_topic_internal_error_out('Random topic worker fatal: ' . $msg . ' [' . $file . ':' . $line . ']', 500);
+});
+
 require_once __DIR__ . '/konvo_soul_helper.php';
 require_once __DIR__ . '/konvo_signature_helper.php';
 $konvoForumPromptHelper = __DIR__ . '/konvo_forum_prompt_helper.php';
@@ -31,11 +72,21 @@ if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://forum.kirupa.c
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((string)getenv('OPENAI_API_KEY')));
 if (!defined('KONVO_SECRET')) define('KONVO_SECRET', trim((string)getenv('DISCOURSE_WEBHOOK_SECRET')));
+if (!defined('KONVO_RANDOM_TOPIC_FAST_MODE')) define('KONVO_RANDOM_TOPIC_FAST_MODE', getenv('KONVO_RANDOM_TOPIC_FAST_MODE') === false ? '1' : (string)getenv('KONVO_RANDOM_TOPIC_FAST_MODE'));
+if (!defined('KONVO_FEED_FETCH_TIMEOUT')) define('KONVO_FEED_FETCH_TIMEOUT', 8);
+if (!defined('KONVO_RANDOM_TOPIC_MAX_SOURCES')) define('KONVO_RANDOM_TOPIC_MAX_SOURCES', 8);
 if (!defined('KONVO_CATEGORY_ID')) define('KONVO_CATEGORY_ID', 34);
 if (!defined('KONVO_WEBDEV_CATEGORY_ID')) define('KONVO_WEBDEV_CATEGORY_ID', 42);
 if (!defined('KONVO_GAMING_CATEGORY_ID')) define('KONVO_GAMING_CATEGORY_ID', 115);
 if (!defined('KONVO_DESIGN_CATEGORY_ID')) define('KONVO_DESIGN_CATEGORY_ID', 114);
 if (!defined('KONVO_TECH_NEWS_CATEGORY_ID')) define('KONVO_TECH_NEWS_CATEGORY_ID', 116);
+
+function konvo_random_topic_fast_mode()
+{
+    $v = strtolower(trim((string)KONVO_RANDOM_TOPIC_FAST_MODE));
+    if ($v === '' || $v === '1' || $v === 'true' || $v === 'yes' || $v === 'on') return true;
+    return false;
+}
 
 $bots = array(
     array('username' => 'BayMax', 'name' => 'BayMax', 'soul_key' => 'baymax', 'soul_fallback' => 'You are BayMax. Write naturally, clearly, and concisely.'),
@@ -130,12 +181,14 @@ function save_seen_urls($seen)
 
 function fetch_url($url)
 {
+    $timeout = (int)KONVO_FEED_FETCH_TIMEOUT;
+    if ($timeout < 3) $timeout = 3;
     if (function_exists('curl_init')) {
         $ch = curl_init($url);
         curl_setopt_array($ch, array(
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_TIMEOUT => 20,
+            CURLOPT_TIMEOUT => $timeout,
             CURLOPT_USERAGENT => 'konvo-random-topic-worker/2.0',
         ));
         $body = curl_exec($ch);
@@ -151,7 +204,7 @@ function fetch_url($url)
     $ctx = stream_context_create(array(
         'http' => array(
             'method' => 'GET',
-            'timeout' => 20,
+            'timeout' => $timeout,
             'header' => "User-Agent: konvo-random-topic-worker/2.0\r\n",
         ),
     ));
@@ -579,6 +632,32 @@ function konvo_extract_json_object($content)
 
 function konvo_pick_topic_category_decision($title, $raw, $picked = array())
 {
+    if (konvo_random_topic_fast_mode()) {
+        $categoryId = (int)KONVO_TECH_NEWS_CATEGORY_ID;
+        $categoryKey = 'tech_news';
+        $reason = 'fast_mode_heuristic';
+        if (konvo_item_looks_gaming_topic($picked) || konvo_text_looks_gaming_related((string)$title . "\n" . (string)$raw)) {
+            $categoryId = (int)KONVO_GAMING_CATEGORY_ID;
+            $categoryKey = 'gaming';
+            $reason = 'fast_mode_gaming';
+        } elseif (konvo_is_design_topic($title, $raw, $picked)) {
+            $categoryId = (int)KONVO_DESIGN_CATEGORY_ID;
+            $categoryKey = 'design';
+            $reason = 'fast_mode_design';
+        } elseif (konvo_is_webdev_question_topic($title, $raw, $picked)) {
+            $categoryId = (int)KONVO_WEBDEV_CATEGORY_ID;
+            $categoryKey = 'web_dev';
+            $reason = 'fast_mode_webdev';
+        }
+        return array(
+            'ok' => true,
+            'category_key' => $categoryKey,
+            'category_id' => $categoryId,
+            'reason' => $reason,
+            'confidence' => 0.72,
+        );
+    }
+
     $fallback = array(
         'ok' => false,
         'category_key' => 'tech_news',
@@ -846,11 +925,16 @@ function parse_feed_items($xml, $max_items)
 function fetch_topic_candidates($feed_sources)
 {
     $all = array();
+    $maxSources = (int)KONVO_RANDOM_TOPIC_MAX_SOURCES;
+    if ($maxSources < 1) $maxSources = 1;
+    $processed = 0;
     foreach ($feed_sources as $source) {
+        if ($processed >= $maxSources) break;
         $feed = isset($source['feed']) ? (string)$source['feed'] : '';
         $kind = isset($source['kind']) ? (string)$source['kind'] : 'technology';
         $site = isset($source['site']) ? (string)$source['site'] : '';
         if ($feed === '') continue;
+        $processed++;
 
         $res = fetch_url($feed);
         if (!$res['ok']) continue;
@@ -1439,15 +1523,19 @@ function make_body($bot, $item)
     $youtubeUrl = $isGaming ? konvo_pick_gaming_youtube_url($item) : '';
     $imageUrl = isset($item['image_url']) ? konvo_normalize_feed_url((string)$item['image_url']) : '';
 
-    $blurbRes = konvo_generate_body_summary_with_llm($bot, $item, false);
-    if (!is_array($blurbRes) || empty($blurbRes['ok']) || !isset($blurbRes['text'])) {
-        $blurbRes = konvo_generate_body_summary_with_llm($bot, $item, true);
-    }
-
-    if (is_array($blurbRes) && !empty($blurbRes['ok']) && isset($blurbRes['text'])) {
-        $blurb = trim((string)$blurbRes['text']);
-    } else {
+    if (konvo_random_topic_fast_mode()) {
         $blurb = konvo_contextual_summary_fallback($item);
+    } else {
+        $blurbRes = konvo_generate_body_summary_with_llm($bot, $item, false);
+        if (!is_array($blurbRes) || empty($blurbRes['ok']) || !isset($blurbRes['text'])) {
+            $blurbRes = konvo_generate_body_summary_with_llm($bot, $item, true);
+        }
+
+        if (is_array($blurbRes) && !empty($blurbRes['ok']) && isset($blurbRes['text'])) {
+            $blurb = trim((string)$blurbRes['text']);
+        } else {
+            $blurb = konvo_contextual_summary_fallback($item);
+        }
     }
     $blurb = konvo_compact_human_summary($blurb, $botNameBase, $kind);
     if (konvo_summary_looks_truncated($blurb)) {
@@ -1464,7 +1552,7 @@ function make_body($bot, $item)
     $blurb = konvo_format_blurb_paragraphs($blurb);
 
     $imageLead = '';
-    if ($imageUrl !== '' && konvo_is_visual_topic_item($item) && stripos($imageUrl, $url) !== 0) {
+    if (!konvo_random_topic_fast_mode() && $imageUrl !== '' && konvo_is_visual_topic_item($item) && stripos($imageUrl, $url) !== 0) {
         $leadRes = konvo_generate_image_lead_with_llm($bot, $item, false);
         if (!is_array($leadRes) || empty($leadRes['ok']) || !isset($leadRes['text'])) {
             $leadRes = konvo_generate_image_lead_with_llm($bot, $item, true);
@@ -1476,15 +1564,19 @@ function make_body($bot, $item)
 
     $videoLead = '';
     if ($isGaming && $youtubeUrl !== '' && $youtubeUrl !== $url) {
-        $vLead = konvo_generate_gaming_video_lead_with_llm($bot, $item, $youtubeUrl, false);
-        if (!is_array($vLead) || empty($vLead['ok']) || !isset($vLead['text'])) {
-            $vLead = konvo_generate_gaming_video_lead_with_llm($bot, $item, $youtubeUrl, true);
-        }
-        if (is_array($vLead) && !empty($vLead['ok']) && isset($vLead['text'])) {
-            $videoLead = trim((string)$vLead['text']);
-        }
-        if ($videoLead === '') {
+        if (konvo_random_topic_fast_mode()) {
             $videoLead = konvo_video_lead_fallback($item);
+        } else {
+            $vLead = konvo_generate_gaming_video_lead_with_llm($bot, $item, $youtubeUrl, false);
+            if (!is_array($vLead) || empty($vLead['ok']) || !isset($vLead['text'])) {
+                $vLead = konvo_generate_gaming_video_lead_with_llm($bot, $item, $youtubeUrl, true);
+            }
+            if (is_array($vLead) && !empty($vLead['ok']) && isset($vLead['text'])) {
+                $videoLead = trim((string)$vLead['text']);
+            }
+            if ($videoLead === '') {
+                $videoLead = konvo_video_lead_fallback($item);
+            }
         }
     }
 
@@ -1668,6 +1760,18 @@ function konvo_generate_title_with_llm($item, $strict)
 
 function build_short_forum_title($item)
 {
+    if (konvo_random_topic_fast_mode()) {
+        $base = normalize_title((string)($item['title'] ?? 'Interesting topic'));
+        $base = konvo_clean_generated_title($base);
+        if ($base === '') $base = 'Interesting topic';
+        if (strlen($base) > 68) {
+            $base = trim((string)substr($base, 0, 68));
+            $base = preg_replace('/\s+\S*$/', '', (string)$base) ?? $base;
+            $base = trim((string)$base);
+        }
+        return array('ok' => true, 'title' => $base);
+    }
+
     $first = konvo_generate_title_with_llm($item, false);
     if (is_array($first) && !empty($first['ok']) && isset($first['title'])) {
         return array('ok' => true, 'title' => (string)$first['title']);
