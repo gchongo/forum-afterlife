@@ -1138,22 +1138,6 @@ $signature = function_exists('konvo_signature_with_optional_emoji')
     : (string)($bot['name'] ?? 'BayMax');
 $recent = casual_load_recent_topics();
 $lane = casual_pick_interest_lane($recent);
-$today = date('Y-m-d');
-if (!$dryRun && !$force && is_array($recent) && $recent !== array()) {
-    $last = $recent[0] ?? null;
-    if (is_array($last)) {
-        $lastTs = (int)($last['ts'] ?? 0);
-        if ($lastTs > 0 && date('Y-m-d', $lastTs) === $today) {
-            casual_out(200, array(
-                'ok' => true,
-                'posted' => false,
-                'reason' => 'already_posted_today',
-                'date' => $today,
-                'last_title' => (string)($last['title'] ?? ''),
-            ));
-        }
-    }
-}
 $recentForumTitles = casual_fetch_latest_topic_titles(120);
 
 $attempts = array();
