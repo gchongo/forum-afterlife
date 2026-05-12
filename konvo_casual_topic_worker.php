@@ -34,6 +34,7 @@ if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISC
 if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((string)getenv('OPENAI_API_KEY')));
 if (!defined('KONVO_SECRET')) define('KONVO_SECRET', trim((string)getenv('DISCOURSE_WEBHOOK_SECRET')));
 if (!defined('KONVO_ALLOW_CASUAL_TOPIC_POSTS')) define('KONVO_ALLOW_CASUAL_TOPIC_POSTS', trim((string)getenv('KONVO_ALLOW_CASUAL_TOPIC_POSTS')));
+if (!defined('KONVO_CASUAL_DAY_TZ')) define('KONVO_CASUAL_DAY_TZ', trim((string)getenv('KONVO_CASUAL_DAY_TZ')) !== '' ? trim((string)getenv('KONVO_CASUAL_DAY_TZ')) : 'America/Los_Angeles');
 if (!defined('KONVO_TALK_CATEGORY_ID')) define('KONVO_TALK_CATEGORY_ID', 34);
 if (!defined('KONVO_WEBDEV_CATEGORY_ID')) define('KONVO_WEBDEV_CATEGORY_ID', 42);
 if (!defined('KONVO_GAMING_CATEGORY_ID')) define('KONVO_GAMING_CATEGORY_ID', 115);
@@ -134,7 +135,7 @@ function casual_daily_counts_load(): array
 
 function casual_daily_counts_save(array $state): void
 {
-    $today = date('Y-m-d');
+    $today = casual_today_key();
     $cutoffTs = strtotime($today . ' 00:00:00 UTC');
     $minTs = ($cutoffTs === false ? time() : $cutoffTs) - (45 * 24 * 3600);
     $clean = array();
@@ -147,6 +148,17 @@ function casual_daily_counts_save(array $state): void
     }
     ksort($clean);
     @file_put_contents(casual_daily_counts_path(), json_encode($clean, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+}
+
+function casual_today_key(): string
+{
+    try {
+        $tz = new DateTimeZone((string)KONVO_CASUAL_DAY_TZ);
+    } catch (\Throwable $e) {
+        $tz = new DateTimeZone('America/Los_Angeles');
+    }
+    $now = new DateTimeImmutable('now', $tz);
+    return $now->format('Y-m-d');
 }
 
 function casual_daily_count_for(string $day): int
@@ -1196,7 +1208,7 @@ $signature = function_exists('konvo_signature_with_optional_emoji')
     : (string)($bot['name'] ?? 'BayMax');
 $recent = casual_load_recent_topics();
 $lane = casual_pick_interest_lane($recent);
-$today = date('Y-m-d');
+$today = casual_today_key();
 if (!$dryRun && !$force) {
     $todayCount = casual_daily_count_for($today);
     if ($todayCount >= 3) {
