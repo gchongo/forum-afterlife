@@ -105,6 +105,64 @@ function casual_state_path(): string
     return $dir . '/casual_topic_recent.json';
 }
 
+function casual_daily_counts_path(): string
+{
+    $dir = __DIR__ . '/.konvo_state';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+    return $dir . '/casual_topic_daily_counts.json';
+}
+
+function casual_daily_counts_load(): array
+{
+    $path = casual_daily_counts_path();
+    if (!is_file($path)) return array();
+    $raw = @file_get_contents($path);
+    if (!is_string($raw) || trim($raw) === '') return array();
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) return array();
+    $clean = array();
+    foreach ($decoded as $day => $count) {
+        $d = trim((string)$day);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) continue;
+        $clean[$d] = max(0, (int)$count);
+    }
+    ksort($clean);
+    return $clean;
+}
+
+function casual_daily_counts_save(array $state): void
+{
+    $today = date('Y-m-d');
+    $cutoffTs = strtotime($today . ' 00:00:00 UTC');
+    $minTs = ($cutoffTs === false ? time() : $cutoffTs) - (45 * 24 * 3600);
+    $clean = array();
+    foreach ($state as $day => $count) {
+        $d = trim((string)$day);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) continue;
+        $ts = strtotime($d . ' 00:00:00 UTC');
+        if ($ts === false || $ts < $minTs) continue;
+        $clean[$d] = max(0, (int)$count);
+    }
+    ksort($clean);
+    @file_put_contents(casual_daily_counts_path(), json_encode($clean, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+}
+
+function casual_daily_count_for(string $day): int
+{
+    $state = casual_daily_counts_load();
+    return max(0, (int)($state[$day] ?? 0));
+}
+
+function casual_daily_count_increment(string $day): int
+{
+    $state = casual_daily_counts_load();
+    $state[$day] = max(0, (int)($state[$day] ?? 0)) + 1;
+    casual_daily_counts_save($state);
+    return (int)$state[$day];
+}
+
 function casual_load_recent_topics(): array
 {
     $path = casual_state_path();
@@ -1140,13 +1198,7 @@ $recent = casual_load_recent_topics();
 $lane = casual_pick_interest_lane($recent);
 $today = date('Y-m-d');
 if (!$dryRun && !$force) {
-    $todayCount = 0;
-    foreach ($recent as $item) {
-        if (!is_array($item)) continue;
-        $ts = (int)($item['ts'] ?? 0);
-        if ($ts <= 0) continue;
-        if (date('Y-m-d', $ts) === $today) $todayCount++;
-    }
+    $todayCount = casual_daily_count_for($today);
     if ($todayCount >= 3) {
         casual_out(200, array(
             'ok' => true,
@@ -1287,6 +1339,7 @@ $postNumber = (int)($post['body']['post_number'] ?? 1);
 $topicUrl = rtrim(KONVO_BASE_URL, '/') . '/t/' . $topicId . '/' . $postNumber;
 casual_remember_topic($title, (string)($plan['angle'] ?? ''), (string)($plan['lane'] ?? (string)($lane['key'] ?? '')));
 casual_consensus_register_topic($topicId, $bot, $title, $categoryId, $plan);
+$todayCountAfterPost = casual_daily_count_increment($today);
 
 casual_out(200, array(
     'ok' => true,
@@ -1301,6 +1354,11 @@ casual_out(200, array(
         'category_id' => $categoryId,
         'gaming_detected' => $gamingDetected,
         'category_decision' => $categoryDecision,
+    ),
+    'daily_cap' => array(
+        'date' => $today,
+        'count_after_post' => $todayCountAfterPost,
+        'max_per_day' => 3,
     ),
     'quirky_media' => array(
         'enabled' => $quirkyMode,
