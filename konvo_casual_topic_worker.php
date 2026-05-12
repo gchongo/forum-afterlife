@@ -311,7 +311,7 @@ function casual_interest_lanes(): array
     return array(
         'games' => array(
             'label' => 'video games and player experience',
-            'guidance' => 'Focus on game design, player behavior, creativity, community, or AI-in-games tradeoffs. Not patch/news reposts.',
+            'guidance' => 'Focus on game design, player behavior, creativity, community, mechanics, balance, or discovery. Not patch/news reposts.',
         ),
         'sci_fi_ai' => array(
             'label' => 'science fiction lens on AI',
@@ -405,6 +405,24 @@ function casual_pick_interest_lane(array $recent): array
         'label' => (string)($picked['label'] ?? 'technology tradeoffs'),
         'guidance' => (string)($picked['guidance'] ?? ''),
         'counts' => $counts,
+    );
+}
+
+function casual_lane_from_key(string $key, array $recent = array()): ?array
+{
+    $k = strtolower(trim($key));
+    if ($k === '') return null;
+    $lanes = casual_interest_lanes();
+    if (!isset($lanes[$k])) return null;
+    $picked = $lanes[$k];
+    $auto = casual_pick_interest_lane($recent);
+    $counts = is_array($auto) && isset($auto['counts']) && is_array($auto['counts']) ? $auto['counts'] : array();
+    return array(
+        'key' => $k,
+        'label' => (string)($picked['label'] ?? 'technology tradeoffs'),
+        'guidance' => (string)($picked['guidance'] ?? ''),
+        'counts' => $counts,
+        'override' => true,
     );
 }
 
@@ -623,12 +641,12 @@ function casual_is_design_topic(string $text): bool
     return true;
 }
 
-function casual_is_ai_or_tech_topic(string $text): bool
+function casual_is_allowed_topic_scope(string $text): bool
 {
     $t = strtolower(trim($text));
     if ($t === '') return false;
     return (bool)preg_match(
-        '/\b(ai|artificial intelligence|llm|language model|chatbot|agentic|automation|algorithm|technology|tech|software|app|apps|platform|internet|web|browser|interface|interfaces|digital|creative tool|creative tools|productivity tool|workflow|device|devices|screen|screens|online community|social web|human computer|human-computer|machine creativity|generative)\b/i',
+        '/\b(ai|artificial intelligence|llm|language model|chatbot|agentic|automation|technology|tech|software|internet|web|browser|workflow|online community|social web|machine creativity|generative|video game|gaming|gameplay|player|npc|difficulty|level design|speedrun|retro game|science fiction|sci[- ]?fi|cyberpunk|space opera|futurism|product strategy|go to market|go-to-market|pricing|margin|hiring|business model|ux|ui|design system|creative process|developer experience|engineering culture|debugging|code review|product team)\b/i',
         $t
     );
 }
@@ -638,7 +656,7 @@ function casual_has_depth_signal(string $text): bool
     $t = strtolower(trim($text));
     if ($t === '') return false;
     return (bool)preg_match(
-        '/\b(tradeoff|trade-off|tension|constraint|second-order|side effect|friction|habit|workflow|trust|taste|craft|attention|memory|ownership|signal|meaning|quality|defaults|intuition|identity|abstraction|cost of convenience|creative process|human side)\b/i',
+        '/\b(tradeoff|trade-off|tension|constraint|second-order|side effect|friction|habit|workflow|trust|taste|craft|attention|memory|ownership|signal|meaning|quality|defaults|intuition|identity|abstraction|cost of convenience|creative process|human side|community|mastery|difficulty curve|discoverability|pricing pressure|hiring signal|creative control|player agency|team dynamics)\b/i',
         $t
     );
 }
@@ -855,8 +873,8 @@ function casual_validate_generated_topic(string $title, string $raw): array
     if (!str_contains($raw, '?')) {
         return array('ok' => false, 'error' => 'body must include an open question');
     }
-    if (!casual_is_ai_or_tech_topic($title . "\n" . $raw)) {
-        return array('ok' => false, 'error' => 'topic must be AI/technology focused');
+    if (!casual_is_allowed_topic_scope($title . "\n" . $raw)) {
+        return array('ok' => false, 'error' => 'topic must stay within tech/design/gaming/business/dev-culture scope');
     }
     if (!casual_has_depth_signal($title . "\n" . $raw)) {
         return array('ok' => false, 'error' => 'topic did not show enough depth');
@@ -1047,12 +1065,15 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
     $laneLabel = trim((string)($lane['label'] ?? 'broad technology tradeoffs'));
     $laneGuidance = trim((string)($lane['guidance'] ?? ''));
     $laneKey = trim((string)($lane['key'] ?? 'general'));
+    $laneFocusConstraint = ($laneKey !== 'sci_fi_ai')
+        ? 'For this lane, do not make AI/LLM the central subject. You may mention AI only as a secondary example. Prefer a non-AI title.'
+        : 'For this lane, sci-fi + AI framing is allowed and expected.';
 
     $system = ($soulPrompt !== '' ? "Bot voice and personality guidance:\n{$soulPrompt}\n\n" : '')
         . 'You generate a single open-question forum topic starter for humans. '
         . 'Return ONLY JSON with this schema: '
         . '{"plan_mood":"...","plan_angle":"...","plan_posting_intent":"...","plan_lane":"...","title":"...","raw":"..."}. '
-        . 'Rules: topic must be about AI, software, developer tools, web platform behavior, or technology tradeoffs in real work. '
+        . 'Rules: topic must be within technology culture broadly: software, games, design, business impact, developer life, product workflows, or science-fiction framing tied to modern tech. '
         . 'Do not produce architecture showcase chatter, link shares, GIF posts, product launch reposts, or news summaries. '
         . 'Anchor the topic around one practical tension or tradeoff and ask for lived experience from others. '
         . 'Avoid coding help requests, implementation details, politics, religion, rage bait, tragedy, and empty hot takes. '
@@ -1064,10 +1085,11 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
         . 'Do not sign the post; Discourse already shows the author username. '
         . 'Uniqueness is mandatory: make this drastically different from recent topics in angle, tension, and wording.';
 
-    $user = "Generate one new AI/technology discussion question now.\n"
-        . "Desired domains across runs: video games, sci-fi+AI, business impact, design impact, developer life, product/workflow tradeoffs.\n"
+    $user = "Generate one new broad tech-culture discussion question now.\n"
+        . "Desired domains across runs: video games, sci-fi framing, business impact, design impact, developer life, product/workflow tradeoffs.\n"
         . "Primary lane for THIS run: {$laneLabel}\n"
         . ($laneGuidance !== '' ? ("Lane guidance: {$laneGuidance}\n") : '')
+        . "Lane focus constraint: {$laneFocusConstraint}\n"
         . "Set plan_lane to exactly this key: {$laneKey}\n"
         . "Recent topics to avoid repeating:\n{$recentHints}\n\n"
         . "Recent forum topics to avoid paraphrasing:\n{$forumRecentHints}\n\n"
@@ -1208,6 +1230,13 @@ $signature = function_exists('konvo_signature_with_optional_emoji')
     : (string)($bot['name'] ?? 'BayMax');
 $recent = casual_load_recent_topics();
 $lane = casual_pick_interest_lane($recent);
+$laneOverride = trim((string)($_GET['lane'] ?? ''));
+if ($laneOverride !== '') {
+    $over = casual_lane_from_key($laneOverride, $recent);
+    if (is_array($over)) {
+        $lane = $over;
+    }
+}
 $today = casual_today_key();
 if (!$dryRun && !$force) {
     $todayCount = casual_daily_count_for($today);
