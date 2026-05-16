@@ -3803,6 +3803,77 @@ function pick_candidate_topic($topics, $seenState)
     return $pool[0];
 }
 
+function worker_pick_orphan_bot_topic_over_24h($topics, $seenState, $maxScan = 30)
+{
+    if (!is_array($topics) || $topics === array()) return null;
+    $now = time();
+    $maxScan = max(5, (int)$maxScan);
+    $pool = array();
+
+    foreach ($topics as $t) {
+        if (!is_array($t)) continue;
+        $topicId = isset($t['id']) ? (int)$t['id'] : 0;
+        $postsCount = isset($t['posts_count']) ? (int)$t['posts_count'] : 0;
+        $visible = isset($t['visible']) ? (bool)$t['visible'] : true;
+        $closed = isset($t['closed']) ? (bool)$t['closed'] : false;
+        $archived = isset($t['archived']) ? (bool)$t['archived'] : false;
+        if ($topicId <= 0 || !$visible || $closed || $archived) continue;
+        if ($postsCount > 1) continue; // unreplied means only OP exists
+
+        $createdAt = isset($t['created_at']) ? strtotime((string)$t['created_at']) : false;
+        $lastPostedAt = isset($t['last_posted_at']) ? strtotime((string)$t['last_posted_at']) : false;
+        $baseTs = ($createdAt !== false) ? (int)$createdAt : (($lastPostedAt !== false) ? (int)$lastPostedAt : 0);
+        if ($baseTs <= 0) continue;
+        $ageSec = max(0, $now - $baseTs);
+        if ($ageSec < (24 * 3600)) continue;
+
+        $idKey = (string)$topicId;
+        if (isset($seenState[$idKey]) && ((int)$seenState[$idKey]) > 0) {
+            // Already acted on recently by this worker.
+            continue;
+        }
+        $pool[] = array('topic' => $t, 'age_seconds' => $ageSec);
+    }
+
+    if ($pool === array()) return null;
+    usort($pool, static function ($a, $b) {
+        $aa = (int)($a['age_seconds'] ?? 0);
+        $bb = (int)($b['age_seconds'] ?? 0);
+        if ($aa === $bb) return 0;
+        return ($aa > $bb) ? -1 : 1;
+    });
+    $pool = array_slice($pool, 0, $maxScan);
+
+    foreach ($pool as $row) {
+        $topic = isset($row['topic']) && is_array($row['topic']) ? $row['topic'] : null;
+        if (!is_array($topic)) continue;
+        $topicId = (int)($topic['id'] ?? 0);
+        if ($topicId <= 0) continue;
+        $detail = fetch_json(rtrim(KONVO_BASE_URL, '/') . '/t/' . $topicId . '.json', array(
+            'Api-Key: ' . KONVO_DISCOURSE_API_KEY,
+            'Api-Username: BayMax',
+        ));
+        if (!is_array($detail) || !isset($detail['post_stream']['posts']) || !is_array($detail['post_stream']['posts'])) continue;
+        $posts = $detail['post_stream']['posts'];
+        if (count($posts) !== 1) continue;
+        $op = $posts[0] ?? null;
+        if (!is_array($op)) continue;
+        $opUsername = trim((string)($op['username'] ?? ''));
+        if ($opUsername === '' || !is_bot_user($opUsername)) continue;
+        $opCreatedAtTs = isset($op['created_at']) ? strtotime((string)$op['created_at']) : false;
+        if ($opCreatedAtTs === false) $opCreatedAtTs = isset($topic['created_at']) ? strtotime((string)$topic['created_at']) : false;
+        $ageFromOp = ($opCreatedAtTs !== false) ? max(0, $now - (int)$opCreatedAtTs) : (int)($row['age_seconds'] ?? 0);
+        if ($ageFromOp < (24 * 3600)) continue;
+        return array(
+            'topic' => $topic,
+            'detail' => $detail,
+            'age_seconds' => $ageFromOp,
+            'op_username' => $opUsername,
+        );
+    }
+    return null;
+}
+
 function find_related_internet_link($title, $body)
 {
     $topicBlob = trim((string)$title . "\n" . (string)$body);
@@ -4991,7 +5062,15 @@ $consensusState = worker_consensus_load();
 $consensusPick = worker_pick_consensus_topic($latest['topic_list']['topics'], $consensusState, $seen);
 $consensusFlowActive = is_array($consensusPick) && isset($consensusPick['topic']) && is_array($consensusPick['topic']);
 $consensusTopicState = $consensusFlowActive && isset($consensusPick['state']) && is_array($consensusPick['state']) ? $consensusPick['state'] : array();
-$topic = $consensusFlowActive ? $consensusPick['topic'] : pick_candidate_topic($latest['topic_list']['topics'], $seen);
+$orphanPriority = null;
+if (!$consensusFlowActive) {
+    $orphanPriority = worker_pick_orphan_bot_topic_over_24h($latest['topic_list']['topics'], $seen, 30);
+}
+$topic = $consensusFlowActive
+    ? $consensusPick['topic']
+    : (is_array($orphanPriority) && isset($orphanPriority['topic']) && is_array($orphanPriority['topic'])
+        ? $orphanPriority['topic']
+        : pick_candidate_topic($latest['topic_list']['topics'], $seen));
 if (!is_array($topic)) {
     out_json(200, array('ok' => true, 'posted' => false, 'reason' => 'No eligible recent topics found.'));
 }
@@ -4999,10 +5078,12 @@ if (!is_array($topic)) {
 $topicId = (int)$topic['id'];
 $topicTitle = isset($topic['title']) ? trim((string)$topic['title']) : 'Untitled topic';
 
-$topicDetail = fetch_json(rtrim(KONVO_BASE_URL, '/') . '/t/' . $topicId . '.json', array(
-    'Api-Key: ' . KONVO_DISCOURSE_API_KEY,
-    'Api-Username: BayMax',
-));
+$topicDetail = (is_array($orphanPriority) && isset($orphanPriority['detail']) && is_array($orphanPriority['detail']))
+    ? $orphanPriority['detail']
+    : fetch_json(rtrim(KONVO_BASE_URL, '/') . '/t/' . $topicId . '.json', array(
+        'Api-Key: ' . KONVO_DISCOURSE_API_KEY,
+        'Api-Username: BayMax',
+    ));
 if (!is_array($topicDetail) || !isset($topicDetail['post_stream']['posts']) || !is_array($topicDetail['post_stream']['posts']) || count($topicDetail['post_stream']['posts']) === 0) {
     out_json(500, array('ok' => false, 'error' => 'Could not fetch topic detail.', 'topic_id' => $topicId));
 }
@@ -5581,6 +5662,11 @@ if ($dryRun) {
             'active' => $consensusFlowActive,
             'state' => $consensusTopicState,
         ),
+        'orphan_priority' => array(
+            'active' => is_array($orphanPriority),
+            'age_seconds' => is_array($orphanPriority) ? (int)($orphanPriority['age_seconds'] ?? 0) : 0,
+            'op_username' => is_array($orphanPriority) ? (string)($orphanPriority['op_username'] ?? '') : '',
+        ),
         'selected_bot' => $bot,
         'recent_other_bot_posts' => $recentOtherBotPosts,
         'bot_streak_guard' => array(
@@ -5687,6 +5773,11 @@ out_json(200, array(
     'consensus_flow' => array(
         'active' => $consensusFlowActive,
         'state' => $consensusTopicState,
+    ),
+    'orphan_priority' => array(
+        'active' => is_array($orphanPriority),
+        'age_seconds' => is_array($orphanPriority) ? (int)($orphanPriority['age_seconds'] ?? 0) : 0,
+        'op_username' => is_array($orphanPriority) ? (string)($orphanPriority['op_username'] ?? '') : '',
     ),
     'selected_bot' => $bot,
     'recent_other_bot_posts' => $recentOtherBotPosts,
