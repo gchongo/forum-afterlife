@@ -81,6 +81,7 @@ if (!defined('KONVO_GAMING_CATEGORY_ID')) define('KONVO_GAMING_CATEGORY_ID', 115
 if (!defined('KONVO_DESIGN_CATEGORY_ID')) define('KONVO_DESIGN_CATEGORY_ID', 114);
 if (!defined('KONVO_TECH_NEWS_CATEGORY_ID')) define('KONVO_TECH_NEWS_CATEGORY_ID', 116);
 if (!defined('KONVO_TITLE_MAX_CHARS')) define('KONVO_TITLE_MAX_CHARS', 64);
+if (!defined('KONVO_NEWS_DIGEST_TZ')) define('KONVO_NEWS_DIGEST_TZ', 'America/Los_Angeles');
 
 function konvo_random_topic_fast_mode()
 {
@@ -178,6 +179,64 @@ function save_seen_urls($seen)
     arsort($seen);
     $seen = array_slice($seen, 0, 600, true);
     @file_put_contents(state_path(), json_encode($seen, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+}
+
+function konvo_news_digest_state_path()
+{
+    $dir = __DIR__ . '/.konvo_state';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+    return $dir . '/random_topic_news_digest_state.json';
+}
+
+function konvo_news_digest_today_key()
+{
+    try {
+        $tz = new DateTimeZone((string)KONVO_NEWS_DIGEST_TZ);
+    } catch (Throwable $e) {
+        $tz = new DateTimeZone('America/Los_Angeles');
+    }
+    $now = new DateTimeImmutable('now', $tz);
+    return $now->format('Y-m-d');
+}
+
+function konvo_news_digest_display_date()
+{
+    try {
+        $tz = new DateTimeZone((string)KONVO_NEWS_DIGEST_TZ);
+    } catch (Throwable $e) {
+        $tz = new DateTimeZone('America/Los_Angeles');
+    }
+    $now = new DateTimeImmutable('now', $tz);
+    return $now->format('n/j/y');
+}
+
+function konvo_news_digest_title_date()
+{
+    try {
+        $tz = new DateTimeZone((string)KONVO_NEWS_DIGEST_TZ);
+    } catch (Throwable $e) {
+        $tz = new DateTimeZone('America/Los_Angeles');
+    }
+    $now = new DateTimeImmutable('now', $tz);
+    return $now->format('n-j-y');
+}
+
+function konvo_news_digest_load_state()
+{
+    $path = konvo_news_digest_state_path();
+    if (!is_file($path)) return array();
+    $raw = @file_get_contents($path);
+    if (!is_string($raw) || trim($raw) === '') return array();
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : array();
+}
+
+function konvo_news_digest_save_state($state)
+{
+    if (!is_array($state)) $state = array();
+    @file_put_contents(konvo_news_digest_state_path(), json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 }
 
 function fetch_url($url)
@@ -986,6 +1045,286 @@ function pick_new_candidate($candidates, $seen)
     return null;
 }
 
+function konvo_pick_digest_candidates($candidates, $seen, $max = 6)
+{
+    if (!is_array($candidates) || $candidates === array()) return array();
+    $max = max(3, (int)$max);
+    $picked = array();
+    $usedUrls = array();
+    $usedSources = array();
+
+    $unseen = array();
+    $fallback = array();
+    foreach ($candidates as $item) {
+        if (!is_array($item)) continue;
+        $url = trim((string)($item['url'] ?? ''));
+        if ($url === '' || isset($usedUrls[$url])) continue;
+        if (konvo_item_looks_shopping_deal($item)) continue;
+        if (konvo_item_looks_controversial_topic($item)) continue;
+        if (!konvo_item_is_english_like($item)) continue;
+        if (!isset($seen[$url])) $unseen[] = $item;
+        $fallback[] = $item;
+    }
+
+    foreach ($unseen as $item) {
+        $url = trim((string)($item['url'] ?? ''));
+        $source = strtolower(trim((string)($item['source'] ?? '')));
+        if ($url === '' || isset($usedUrls[$url])) continue;
+        if ($source !== '' && isset($usedSources[$source])) continue;
+        $picked[] = $item;
+        $usedUrls[$url] = true;
+        if ($source !== '') $usedSources[$source] = true;
+        if (count($picked) >= $max) break;
+    }
+
+    if (count($picked) < $max) {
+        foreach ($fallback as $item) {
+            $url = trim((string)($item['url'] ?? ''));
+            if ($url === '' || isset($usedUrls[$url])) continue;
+            $picked[] = $item;
+            $usedUrls[$url] = true;
+            if (count($picked) >= $max) break;
+        }
+    }
+
+    return $picked;
+}
+
+function konvo_compose_digest_body($bot, $items)
+{
+    if (!is_array($items) || $items === array()) return '';
+    $lines = array();
+    $lines[] = konvo_news_digest_display_date();
+    $digestIntro = konvo_generate_digest_intro_with_llm($items);
+    if ($digestIntro === '') {
+        $digestIntro = konvo_digest_intro_fallback($items);
+    }
+    if ($digestIntro !== '') {
+        $lines[] = '';
+        $lines[] = $digestIntro;
+    }
+    $idx = 0;
+    foreach ($items as $item) {
+        if (!is_array($item)) continue;
+        $title = trim((string)($item['title'] ?? ''));
+        $url = trim((string)($item['url'] ?? ''));
+        if ($title === '' || $url === '') continue;
+        $idx++;
+        $summary = konvo_contextual_summary_fallback($item);
+        $summary = konvo_compact_human_summary($summary, (string)($bot['name'] ?? 'Bot'), (string)($item['kind'] ?? 'technology'));
+        if (strlen($summary) > 180) {
+            $summary = trim((string)substr($summary, 0, 180));
+            $cut = strrpos($summary, ' ');
+            if ($cut !== false && $cut > 80) $summary = trim((string)substr($summary, 0, $cut));
+            $summary = rtrim($summary, " .,;:-") . '.';
+        }
+        $lines[] = '';
+        $lines[] = $idx . ') ' . normalize_title($title);
+        $lines[] = '';
+        $lines[] = $url;
+        if ($summary !== '') {
+            $lines[] = '';
+            $lines[] = $summary;
+        }
+    }
+    return trim(implode("\n", $lines));
+}
+
+function konvo_digest_intro_fallback($items)
+{
+    if (!is_array($items) || $items === array()) return 'A quick sweep of practical stories across AI, products, and design.';
+    $blob = strtolower(implode(' ', array_values(array_map(static function ($it) {
+        if (!is_array($it)) return '';
+        return trim((string)($it['title'] ?? '')) . ' ' . trim((string)($it['summary'] ?? ''));
+    }, $items))));
+
+    $themes = array();
+    if (preg_match('/\b(ai|llm|openai|anthropic|model|agent)\b/i', $blob)) $themes[] = 'AI';
+    if (preg_match('/\b(design|ux|ui|interface|product)\b/i', $blob)) $themes[] = 'design';
+    if (preg_match('/\b(phone|mobile|android|ios|gadget|hardware)\b/i', $blob)) $themes[] = 'consumer tech';
+    if (preg_match('/\b(security|privacy|copyright|policy|regulation)\b/i', $blob)) $themes[] = 'policy and security';
+    if (preg_match('/\b(dev|programming|javascript|css|frontend|backend|api)\b/i', $blob)) $themes[] = 'developer workflow';
+    if (preg_match('/\b(climate|energy|solar|grid)\b/i', $blob)) $themes[] = 'energy and infrastructure';
+
+    $themes = array_values(array_unique(array_filter($themes)));
+    if ($themes === array()) {
+        return 'A quick sweep of practical stories across AI, products, and design.';
+    }
+    $themes = array_slice($themes, 0, 3);
+    if (count($themes) === 1) return 'A quick sweep focused on ' . $themes[0] . '.';
+    if (count($themes) === 2) return 'A quick sweep covering ' . $themes[0] . ' and ' . $themes[1] . '.';
+    return 'A quick sweep covering ' . $themes[0] . ', ' . $themes[1] . ', and ' . $themes[2] . '.';
+}
+
+function konvo_generate_digest_intro_with_llm($items)
+{
+    if (!function_exists('curl_init')) return '';
+    if (!is_array($items) || $items === array()) return '';
+    if (KONVO_OPENAI_API_KEY === '') return '';
+
+    $headlines = array();
+    foreach ($items as $item) {
+        if (!is_array($item)) continue;
+        $t = trim((string)($item['title'] ?? ''));
+        if ($t === '') continue;
+        $headlines[] = '- ' . $t;
+        if (count($headlines) >= 8) break;
+    }
+    if ($headlines === array()) return '';
+
+    $system = 'Write one sentence (max 20 words) summarizing a daily tech digest. '
+        . 'Return ONLY JSON: {"intro":"..."}. '
+        . 'Rules: one complete sentence, plain English, concise, no emoji, no quotes, no bullet points, no question.';
+    $user = "Headlines:\n" . implode("\n", $headlines) . "\n\nWrite the one-sentence intro now.";
+    $payload = array(
+        'model' => konvo_model_for_task('article_summary'),
+        'messages' => array(
+            array('role' => 'system', 'content' => $system),
+            array('role' => 'user', 'content' => $user),
+        ),
+        'temperature' => 0.35,
+    );
+
+    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    curl_setopt_array($ch, array(
+        CURLOPT_POST => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 25,
+        CURLOPT_HTTPHEADER => array(
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . KONVO_OPENAI_API_KEY,
+        ),
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_SLASHES),
+    ));
+    $raw = curl_exec($ch);
+    $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+    if ($raw === false || $err !== '' || $status < 200 || $status >= 300) return '';
+
+    $decoded = json_decode((string)$raw, true);
+    if (!is_array($decoded) || !isset($decoded['choices'][0]['message']['content'])) return '';
+    $content = trim((string)$decoded['choices'][0]['message']['content']);
+
+    $obj = null;
+    if ($content !== '' && strpos($content, '{') !== false && strrpos($content, '}') !== false) {
+        $start = strpos($content, '{');
+        $end = strrpos($content, '}');
+        $obj = json_decode(substr($content, $start, $end - $start + 1), true);
+    }
+    $intro = is_array($obj) ? trim((string)($obj['intro'] ?? '')) : trim((string)strtok($content, "\n"));
+    $intro = preg_replace('/\s+/', ' ', (string)$intro) ?? $intro;
+    $intro = trim((string)$intro, " \t\n\r\0\x0B\"'`“”‘’");
+    $intro = preg_replace('/[\r\n]+/', ' ', (string)$intro) ?? $intro;
+    $intro = trim((string)$intro);
+    if ($intro === '') return '';
+    if (strlen($intro) > 180) {
+        $intro = trim((string)substr($intro, 0, 180));
+        $cut = strrpos($intro, ' ');
+        if ($cut !== false && $cut > 80) $intro = trim((string)substr($intro, 0, $cut));
+    }
+    $intro = preg_replace('/\?+$/', '.', (string)$intro) ?? $intro;
+    if (!preg_match('/[.!]$/', $intro)) $intro .= '.';
+    return $intro;
+}
+
+function konvo_generate_digest_title_with_llm($items)
+{
+    if (!function_exists('curl_init')) return array('ok' => false, 'error' => 'curl_init unavailable');
+    if (!is_array($items) || $items === array()) return array('ok' => false, 'error' => 'no digest items');
+    if (KONVO_OPENAI_API_KEY === '') return array('ok' => false, 'error' => 'OPENAI_API_KEY missing');
+
+    $headlines = array();
+    foreach ($items as $item) {
+        if (!is_array($item)) continue;
+        $t = trim((string)($item['title'] ?? ''));
+        if ($t === '') continue;
+        $headlines[] = '- ' . $t;
+        if (count($headlines) >= 8) break;
+    }
+    if ($headlines === array()) return array('ok' => false, 'error' => 'no titles');
+
+    $datePrefix = konvo_news_digest_display_date();
+    $prefixLen = strlen($datePrefix) + 1; // trailing space
+    $baseMaxChars = max(24, ((int)KONVO_TITLE_MAX_CHARS) - $prefixLen);
+
+    $system = 'Write one concise forum title for a daily tech-news roundup post. '
+        . 'Return ONLY JSON: {"title":"..."}. '
+        . 'Rules: complete thought, statement style, 5-11 words, <= ' . $baseMaxChars . ' chars, no colon, no emoji, no quotes, no question mark. '
+        . 'Do not include a date prefix; date is added separately. '
+        . 'Do not copy any single headline verbatim.';
+    $user = "Top headlines today:\n" . implode("\n", $headlines) . "\n\nGenerate the roundup title now.";
+    $payload = array(
+        'model' => konvo_model_for_task('article_title'),
+        'messages' => array(
+            array('role' => 'system', 'content' => $system),
+            array('role' => 'user', 'content' => $user),
+        ),
+        'temperature' => 0.55,
+    );
+
+    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    curl_setopt_array($ch, array(
+        CURLOPT_POST => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 35,
+        CURLOPT_HTTPHEADER => array(
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . KONVO_OPENAI_API_KEY,
+        ),
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_SLASHES),
+    ));
+    $raw = curl_exec($ch);
+    $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+    if ($raw === false || $err !== '') return array('ok' => false, 'error' => 'OpenAI error: ' . $err, 'status' => $status);
+    $decoded = json_decode((string)$raw, true);
+    if (!is_array($decoded) || !isset($decoded['choices'][0]['message']['content'])) return array('ok' => false, 'error' => 'OpenAI response format error', 'status' => $status);
+    $content = trim((string)$decoded['choices'][0]['message']['content']);
+    $obj = null;
+    if ($content !== '' && strpos($content, '{') !== false && strrpos($content, '}') !== false) {
+        $start = strpos($content, '{');
+        $end = strrpos($content, '}');
+        $obj = json_decode(substr($content, $start, $end - $start + 1), true);
+    }
+    $title = is_array($obj) ? trim((string)($obj['title'] ?? '')) : trim((string)strtok($content, "\n"));
+    $title = konvo_news_digest_title_with_date($title);
+    $errMsg = '';
+    if ($title === '' || !konvo_validate_forum_title_candidate($title, $errMsg)) {
+        return array('ok' => false, 'error' => $errMsg !== '' ? $errMsg : 'invalid digest title', 'status' => $status);
+    }
+    return array('ok' => true, 'title' => $title, 'status' => $status);
+}
+
+function konvo_news_digest_title_with_date($title)
+{
+    $date = konvo_news_digest_title_date();
+    $base = konvo_clean_generated_title((string)$title);
+    for ($i = 0; $i < 4; $i++) {
+        $next = preg_replace('/^\d{1,2}[\/-]\d{1,2}[\/-]\d{2}\s*/', '', (string)$base) ?? $base;
+        if ($next === $base) break;
+        $base = ltrim((string)$next);
+    }
+    $base = preg_replace('/\?+$/', '', (string)$base) ?? $base;
+    $base = preg_replace('/[:;,\.\-]+$/', '', (string)$base) ?? $base;
+    $base = trim((string)$base);
+    if ($base === '') $base = 'tech stories worth your attention';
+
+    $prefix = $date . ' ';
+    $max = (int)KONVO_TITLE_MAX_CHARS;
+    if ($max < 40) $max = 85;
+    $allowed = $max - strlen($prefix);
+    if ($allowed < 16) $allowed = 16;
+    if (strlen($base) > $allowed) {
+        $short = trim((string)substr($base, 0, $allowed));
+        $lastSpace = strrpos($short, ' ');
+        if ($lastSpace !== false && $lastSpace > 10) $short = trim((string)substr($short, 0, $lastSpace));
+        $base = rtrim((string)$short, " .,:;!?-");
+    }
+    return trim($prefix . $base);
+}
+
 function konvo_clean_generated_summary($text)
 {
     $text = trim(strip_tags((string)$text));
@@ -1630,7 +1969,7 @@ function konvo_clean_generated_title($title)
     $title = preg_replace('/\bui\b/', 'UI', (string)$title);
     $title = preg_replace('/\bux\b/', 'UX', (string)$title);
     $title = preg_replace('/\bapi\b/', 'API', (string)$title);
-    return konvo_ensure_question_mark_title(trim((string)$title));
+    return trim((string)$title);
 }
 
 function konvo_title_looks_incomplete_phrase($title)
@@ -1861,7 +2200,7 @@ function konvo_has_youtube_video_url($text)
 
 function post_topic($botUsername, $title, $raw, $categoryId = null)
 {
-    $title = konvo_ensure_question_mark_title((string)$title);
+    $title = trim((string)$title);
     $category = is_numeric($categoryId) ? (int)$categoryId : (int)KONVO_CATEGORY_ID;
     $payload = array(
         'title' => $title,
@@ -1997,6 +2336,9 @@ if (KONVO_OPENAI_API_KEY === '') {
 }
 
 $dryRun = isset($_GET['dry_run']) && (string)$_GET['dry_run'] === '1';
+$force = isset($_GET['force']) && (string)$_GET['force'] === '1';
+$allowNewTopicsEnv = strtolower(trim((string)getenv('KONVO_ALLOW_NEW_TOPICS')));
+$allowNewTopics = !in_array($allowNewTopicsEnv, array('0', 'false', 'no', 'off'), true);
 $previewMode = (isset($_GET['preview']) && (string)$_GET['preview'] === '1')
     || (isset($_GET['preview_only']) && (string)$_GET['preview_only'] === '1');
 $confirmPost = (isset($_POST['confirm_post']) && (string)$_POST['confirm_post'] === '1')
@@ -2023,7 +2365,6 @@ if ($confirmPost) {
 
     $title = isset($_POST['edited_title']) ? trim((string)$_POST['edited_title']) : '';
     if ($title === '') $title = isset($payload['topic_title']) ? trim((string)$payload['topic_title']) : '';
-    $title = konvo_ensure_question_mark_title($title);
 
     $raw = isset($_POST['edited_raw']) ? trim((string)$_POST['edited_raw']) : '';
     if ($raw === '') $raw = isset($payload['topic_raw']) ? trim((string)$payload['topic_raw']) : '';
@@ -2106,12 +2447,24 @@ if ($confirmPost) {
     $postNumber = isset($posted['body']['post_number']) ? (int)$posted['body']['post_number'] : 1;
     $postUrl = rtrim(KONVO_BASE_URL, '/') . '/t/' . $topicId . '/' . $postNumber;
 
+    $seen = load_seen_urls();
     $url = isset($payload['picked_url']) ? (string)$payload['picked_url'] : '';
     if ($url !== '') {
-        $seen = load_seen_urls();
         $seen[$url] = time();
-        save_seen_urls($seen);
     }
+    if (isset($payload['digest_urls']) && is_array($payload['digest_urls'])) {
+        foreach ($payload['digest_urls'] as $du) {
+            $du = trim((string)$du);
+            if ($du !== '') $seen[$du] = time();
+        }
+    }
+    save_seen_urls($seen);
+
+    $digestState = konvo_news_digest_load_state();
+    $digestState['last_post_day'] = konvo_news_digest_today_key();
+    $digestState['last_post_url'] = $postUrl;
+    $digestState['last_post_ts'] = time();
+    konvo_news_digest_save_state($digestState);
 
     out_json(200, array(
         'ok' => true,
@@ -2128,7 +2481,17 @@ if ($confirmPost) {
             'source_feed' => isset($payload['picked_source_feed']) ? (string)$payload['picked_source_feed'] : '',
             'forced_gaming_author' => $forcedGamingAuthor,
             'category_decision' => $categoryDecision,
+            'digest_count' => isset($payload['digest_titles']) && is_array($payload['digest_titles']) ? count($payload['digest_titles']) : 0,
         ),
+    ));
+}
+
+if (!$allowNewTopics && !$force && !$previewMode && !$dryRun) {
+    out_json(200, array(
+        'ok' => true,
+        'posted' => false,
+        'reason' => 'new_topic_creation_disabled',
+        'hint' => 'Set KONVO_ALLOW_NEW_TOPICS=0 to disable, or pass force=1 to override.',
     ));
 }
 
@@ -2146,59 +2509,52 @@ if (!is_array($candidates) || count($candidates) === 0) {
     ));
 }
 
-$picked = pick_new_candidate($candidates, $seen);
-if (!is_array($picked)) {
-    out_json(500, array('ok' => false, 'error' => 'Could not pick candidate'));
-}
-if (konvo_item_looks_controversial_topic($picked)) {
+$digestState = konvo_news_digest_load_state();
+$todayKey = konvo_news_digest_today_key();
+$alreadyPostedToday = isset($digestState['last_post_day']) && (string)$digestState['last_post_day'] === (string)$todayKey;
+if ($alreadyPostedToday && !$dryRun && !$previewMode && !$force) {
     out_json(200, array(
         'ok' => true,
         'posted' => false,
-        'reason' => 'Skipped controversial topic by policy.',
-        'picked' => $picked,
-    ));
-}
-if (!konvo_item_is_english_like($picked)) {
-    out_json(200, array(
-        'ok' => true,
-        'posted' => false,
-        'reason' => 'Skipped non-English source content by policy.',
-        'picked' => $picked,
+        'reason' => 'daily_news_digest_already_posted',
+        'day' => $todayKey,
+        'last_post_url' => isset($digestState['last_post_url']) ? (string)$digestState['last_post_url'] : '',
     ));
 }
 
-$pickedLooksGaming = konvo_item_looks_gaming_topic($picked);
-if ($pickedLooksGaming) {
-    $vaultboyBot = find_bot_by_username($bots, 'vaultboy');
-    $bot = is_array($vaultboyBot) ? $vaultboyBot : $bots[0];
-} else {
-    shuffle($bots);
-    $bot = $bots[0];
+$digestItems = konvo_pick_digest_candidates($candidates, $seen, 6);
+if (!is_array($digestItems) || $digestItems === array()) {
+    out_json(500, array('ok' => false, 'error' => 'Could not build daily digest candidates'));
 }
-$titleRes = build_short_forum_title($picked);
+
+$picked = $digestItems[0];
+shuffle($bots);
+$bot = $bots[0];
+$titleRes = konvo_generate_digest_title_with_llm($digestItems);
 if (!is_array($titleRes) || empty($titleRes['ok']) || !isset($titleRes['title'])) {
-    out_json(502, array(
-        'ok' => false,
-        'error' => is_array($titleRes) && isset($titleRes['error']) ? (string)$titleRes['error'] : 'Failed to generate title with model.',
-        'picked' => $picked,
-    ));
+    $fallbackTitle = konvo_news_digest_title_with_date('tech stories worth your attention');
+    $titleRes = array('ok' => true, 'title' => $fallbackTitle);
 }
-$topicTitle = konvo_ensure_question_mark_title(trim((string)$titleRes['title']));
-$topicRaw = make_body($bot, $picked);
-if (konvo_item_looks_shopping_deal($picked) || konvo_text_looks_shopping_deal($topicTitle . "\n" . $topicRaw)) {
+$topicTitle = trim((string)$titleRes['title']);
+$topicTitle = konvo_news_digest_title_with_date($topicTitle);
+if ($topicTitle === '') $topicTitle = konvo_news_digest_title_with_date('tech stories worth your attention');
+
+$topicRaw = konvo_compose_digest_body($bot, $digestItems);
+if (trim((string)$topicRaw) === '') {
+    out_json(500, array('ok' => false, 'error' => 'Could not compose digest body'));
+}
+if (konvo_text_looks_shopping_deal($topicTitle . "\n" . $topicRaw)) {
     out_json(200, array(
         'ok' => true,
         'posted' => false,
         'reason' => 'Skipped shopping deal/sales topic by policy.',
-        'picked' => $picked,
     ));
 }
-if (konvo_item_looks_controversial_topic($picked) || konvo_text_looks_controversial_topic($topicTitle . "\n" . $topicRaw)) {
+if (konvo_text_looks_controversial_topic($topicTitle . "\n" . $topicRaw)) {
     out_json(200, array(
         'ok' => true,
         'posted' => false,
         'reason' => 'Skipped controversial topic by policy.',
-        'picked' => $picked,
     ));
 }
 if (!konvo_text_is_english_like($topicTitle) || !konvo_text_is_english_like($topicRaw)) {
@@ -2206,29 +2562,17 @@ if (!konvo_text_is_english_like($topicTitle) || !konvo_text_is_english_like($top
         'ok' => true,
         'posted' => false,
         'reason' => 'Skipped non-English generated output by policy.',
-        'picked' => $picked,
     ));
 }
-$categoryDecision = konvo_pick_topic_category_decision($topicTitle, $topicRaw, $picked);
-$categoryId = (int)($categoryDecision['category_id'] ?? (int)KONVO_CATEGORY_ID);
-if ($categoryId === (int)KONVO_GAMING_CATEGORY_ID && strtolower((string)($bot['username'] ?? '')) !== 'vaultboy') {
-    $vaultboyBot = find_bot_by_username($bots, 'vaultboy');
-    if (is_array($vaultboyBot)) {
-        $bot = $vaultboyBot;
-        $topicRaw = make_body($bot, $picked);
-        $categoryDecision = konvo_pick_topic_category_decision($topicTitle, $topicRaw, $picked);
-        $categoryId = (int)($categoryDecision['category_id'] ?? (int)KONVO_CATEGORY_ID);
-    }
-}
-if ($categoryId === (int)KONVO_GAMING_CATEGORY_ID && !konvo_has_youtube_video_url($topicRaw)) {
-    out_json(200, array(
-        'ok' => true,
-        'posted' => false,
-        'reason' => 'Skipped gaming topic because no direct YouTube video URL was found.',
-        'bot' => $bot,
-        'picked' => $picked,
-    ));
-}
+$categoryDecision = array(
+    'ok' => true,
+    'category_key' => 'tech_news',
+    'category_id' => (int)KONVO_TECH_NEWS_CATEGORY_ID,
+    'reason' => 'daily_news_digest',
+    'confidence' => 1.0,
+);
+$categoryId = (int)KONVO_TECH_NEWS_CATEGORY_ID;
+$pickedLooksGaming = false;
 
 $previewPayload = array(
     'generated_at' => time(),
@@ -2246,6 +2590,12 @@ $previewPayload = array(
     'picked_source_feed' => isset($picked['source_feed']) ? (string)$picked['source_feed'] : '',
     'picked_is_gaming' => $pickedLooksGaming,
     'category_decision' => $categoryDecision,
+    'digest_urls' => array_values(array_filter(array_map(static function ($it) {
+        return is_array($it) ? trim((string)($it['url'] ?? '')) : '';
+    }, $digestItems))),
+    'digest_titles' => array_values(array_filter(array_map(static function ($it) {
+        return is_array($it) ? trim((string)($it['title'] ?? '')) : '';
+    }, $digestItems))),
 );
 $previewToken = build_preview_token($previewPayload);
 
@@ -2269,9 +2619,18 @@ if ($previewMode) {
             'category_id' => $categoryId,
             'raw_preview' => $topicRaw,
             'category_decision' => $categoryDecision,
+            'digest_count' => count($digestItems),
+            'digest_titles' => array_values(array_map(static function ($it) {
+                return is_array($it) ? (string)($it['title'] ?? '') : '';
+            }, $digestItems)),
         ),
         'source_count' => count($feed_sources),
         'candidate_count' => count($candidates),
+        'daily_guard' => array(
+            'day' => $todayKey,
+            'already_posted_today' => $alreadyPostedToday,
+            'last_post_url' => isset($digestState['last_post_url']) ? (string)$digestState['last_post_url'] : '',
+        ),
     ));
 }
 
@@ -2291,9 +2650,27 @@ if ($dryRun) {
             'source_feed' => isset($picked['source_feed']) ? $picked['source_feed'] : '',
             'raw_preview' => $topicRaw,
             'category_decision' => $categoryDecision,
+            'digest_count' => count($digestItems),
+            'digest_titles' => array_values(array_map(static function ($it) {
+                return is_array($it) ? (string)($it['title'] ?? '') : '';
+            }, $digestItems)),
         ),
         'source_count' => count($feed_sources),
         'candidate_count' => count($candidates),
+        'daily_guard' => array(
+            'day' => $todayKey,
+            'already_posted_today' => $alreadyPostedToday,
+            'last_post_url' => isset($digestState['last_post_url']) ? (string)$digestState['last_post_url'] : '',
+        ),
+    ));
+}
+
+if (!$allowNewTopics && !$force) {
+    out_json(200, array(
+        'ok' => true,
+        'posted' => false,
+        'reason' => 'new_topic_creation_disabled',
+        'hint' => 'Set KONVO_ALLOW_NEW_TOPICS=0 to disable, or pass force=1 to override.',
     ));
 }
 
@@ -2315,8 +2692,17 @@ $topicId = isset($posted['body']['topic_id']) ? (int)$posted['body']['topic_id']
 $postNumber = isset($posted['body']['post_number']) ? (int)$posted['body']['post_number'] : 1;
 $postUrl = rtrim(KONVO_BASE_URL, '/') . '/t/' . $topicId . '/' . $postNumber;
 
-$seen[$picked['url']] = time();
+foreach ($digestItems as $it) {
+    if (!is_array($it)) continue;
+    $u = trim((string)($it['url'] ?? ''));
+    if ($u !== '') $seen[$u] = time();
+}
 save_seen_urls($seen);
+
+$digestState['last_post_day'] = $todayKey;
+$digestState['last_post_url'] = $postUrl;
+$digestState['last_post_ts'] = time();
+konvo_news_digest_save_state($digestState);
 
 out_json(200, array(
     'ok' => true,
@@ -2332,6 +2718,7 @@ out_json(200, array(
         'source' => isset($picked['source']) ? $picked['source'] : '',
         'source_feed' => isset($picked['source_feed']) ? $picked['source_feed'] : '',
         'category_decision' => $categoryDecision,
+        'digest_count' => count($digestItems),
     ),
     'source_count' => count($feed_sources),
 ));

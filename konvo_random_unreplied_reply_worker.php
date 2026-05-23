@@ -116,6 +116,109 @@ function worker_consensus_state_path()
     return $dir . '/casual_consensus_state.json';
 }
 
+function worker_opening_memory_path()
+{
+    $dir = __DIR__ . '/.konvo_state';
+    if (!is_dir($dir)) @mkdir($dir, 0775, true);
+    return $dir . '/recent_reply_openings.json';
+}
+
+function worker_load_opening_memory()
+{
+    $path = worker_opening_memory_path();
+    if (!is_file($path)) return array();
+    $raw = @file_get_contents($path);
+    if (!is_string($raw) || trim($raw) === '') return array();
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : array();
+}
+
+function worker_save_opening_memory($rows)
+{
+    if (!is_array($rows)) $rows = array();
+    $now = time();
+    $clean = array();
+    foreach ($rows as $row) {
+        if (!is_array($row)) continue;
+        $stem = trim((string)($row['stem'] ?? ''));
+        $ts = (int)($row['ts'] ?? 0);
+        if ($stem === '' || $ts <= 0) continue;
+        if (($now - $ts) > (7 * 24 * 3600)) continue;
+        $clean[] = array(
+            'stem' => $stem,
+            'ts' => $ts,
+            'topic_id' => (int)($row['topic_id'] ?? 0),
+            'bot' => trim((string)($row['bot'] ?? '')),
+        );
+    }
+    usort($clean, static function ($a, $b) {
+        return ((int)($b['ts'] ?? 0)) <=> ((int)($a['ts'] ?? 0));
+    });
+    if (count($clean) > 250) $clean = array_slice($clean, 0, 250);
+    @file_put_contents(worker_opening_memory_path(), json_encode($clean, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+}
+
+function worker_opening_stem($text)
+{
+    $open = strtolower(trim((string)worker_extract_opening_line((string)$text)));
+    if ($open === '') return '';
+    $open = preg_replace('/https?:\/\/\S+/i', '', $open) ?? $open;
+    $open = preg_replace('/[^a-z0-9\s]/i', ' ', $open) ?? $open;
+    $open = preg_replace('/\s+/', ' ', $open) ?? $open;
+    $open = trim((string)$open);
+    if ($open === '') return '';
+    $parts = explode(' ', $open);
+    if (count($parts) > 10) $parts = array_slice($parts, 0, 10);
+    return trim((string)implode(' ', $parts));
+}
+
+function worker_recent_opening_stems($memory, $hours = 72, $limit = 30)
+{
+    if (!is_array($memory) || $memory === array()) return array();
+    $now = time();
+    $cutoff = $now - max(1, (int)$hours) * 3600;
+    $seen = array();
+    $out = array();
+    foreach ($memory as $row) {
+        if (!is_array($row)) continue;
+        $stem = trim((string)($row['stem'] ?? ''));
+        $ts = (int)($row['ts'] ?? 0);
+        if ($stem === '' || $ts < $cutoff) continue;
+        if (isset($seen[$stem])) continue;
+        $seen[$stem] = true;
+        $out[] = $stem;
+        if (count($out) >= max(5, (int)$limit)) break;
+    }
+    return $out;
+}
+
+function worker_opening_stem_reused($stem, $recentStems)
+{
+    $stem = trim((string)$stem);
+    if ($stem === '' || !is_array($recentStems) || $recentStems === array()) return false;
+    foreach ($recentStems as $s) {
+        $s = trim((string)$s);
+        if ($s === '') continue;
+        if ($s === $stem) return true;
+        if (strpos($s, $stem) === 0 || strpos($stem, $s) === 0) return true;
+    }
+    return false;
+}
+
+function worker_remember_opening_stem($stem, $topicId, $botUsername)
+{
+    $stem = trim((string)$stem);
+    if ($stem === '') return;
+    $rows = worker_load_opening_memory();
+    $rows[] = array(
+        'stem' => $stem,
+        'ts' => time(),
+        'topic_id' => (int)$topicId,
+        'bot' => trim((string)$botUsername),
+    );
+    worker_save_opening_memory($rows);
+}
+
 function worker_consensus_load()
 {
     $path = worker_consensus_state_path();
@@ -3757,6 +3860,48 @@ function worker_force_genuine_question_with_llm($bot, $topicTitle, $targetRaw, $
     return trim((string)$txt);
 }
 
+function worker_rewrite_non_mimic_reply_with_llm($bot, $topicTitle, $targetRaw, $draft, $recentContext = '')
+{
+    if (!is_array($bot)) return '';
+    $botUsername = isset($bot['username']) ? (string)$bot['username'] : 'Bot';
+    $soulKey = isset($bot['soul_key']) ? (string)$bot['soul_key'] : strtolower((string)$botUsername);
+    $soul = konvo_compose_forum_persona_system_prompt(
+        konvo_load_soul($soulKey, 'Write naturally, concise, and human.')
+    );
+    $isTechnical = is_codey_topic((string)$topicTitle, (string)$targetRaw)
+        || (function_exists('kirupa_is_technical_text') && kirupa_is_technical_text((string)$topicTitle . "\n" . (string)$targetRaw));
+    $model = worker_model_for_task($isTechnical ? 'reply_generation_technical' : 'reply_generation', array('technical' => $isTechnical));
+    if (!is_string($model) || trim($model) === '' || KONVO_OPENAI_API_KEY === '') return '';
+
+    $system = trim((string)$soul)
+        . ' Rewrite this draft so it replies to the target post without mimicking its opening phrase.'
+        . ' Keep 1-2 short sentences, casual forum tone, and one concrete new detail.'
+        . ' Do not copy the first sentence structure or wording from the target post.'
+        . ' Never repeat a 4-word sequence from the target post.'
+        . ' No greeting, no sign-off, no bullets.';
+    $user = "Topic title: {$topicTitle}\n\nTarget post:\n{$targetRaw}\n\nRecent thread context:\n{$recentContext}\n\nCurrent draft:\n{$draft}\n\nRewrite now.";
+    $res = post_json(
+        'https://api.openai.com/v1/chat/completions',
+        array(
+            'model' => $model,
+            'messages' => array(
+                array('role' => 'system', 'content' => $system),
+                array('role' => 'user', 'content' => $user),
+            ),
+            'temperature' => 0.9,
+        ),
+        array('Authorization: Bearer ' . KONVO_OPENAI_API_KEY)
+    );
+    if (!$res['ok'] || !isset($res['body']['choices'][0]['message']['content'])) return '';
+    $txt = trim((string)$res['body']['choices'][0]['message']['content']);
+    if ($txt === '') return '';
+    $txt = worker_apply_micro_grammar_fixes($txt);
+    $txt = worker_markdown_code_integrity_pass($txt);
+    $txt = worker_normalize_code_fence_spacing($txt);
+    $txt = worker_strip_foreign_bot_name_noise($txt, $botUsername);
+    return trim((string)$txt);
+}
+
 function pick_candidate_topic($topics, $seenState)
 {
     $pool = array();
@@ -3801,6 +3946,78 @@ function pick_candidate_topic($topics, $seenState)
         if (!isset($seenState[$id])) return $t;
     }
     return $pool[0];
+}
+
+function worker_pick_orphan_bot_topic_over_24h($topics, $seenState, $maxScan = 30)
+{
+    if (!is_array($topics) || $topics === array()) return null;
+    $now = time();
+    $maxScan = max(5, (int)$maxScan);
+    $pool = array();
+
+    foreach ($topics as $t) {
+        if (!is_array($t)) continue;
+        $topicId = isset($t['id']) ? (int)$t['id'] : 0;
+        $postsCount = isset($t['posts_count']) ? (int)$t['posts_count'] : 0;
+        $visible = isset($t['visible']) ? (bool)$t['visible'] : true;
+        $closed = isset($t['closed']) ? (bool)$t['closed'] : false;
+        $archived = isset($t['archived']) ? (bool)$t['archived'] : false;
+        if ($topicId <= 0 || !$visible || $closed || $archived) continue;
+        if ($postsCount > 1) continue; // unreplied means only OP exists
+
+        $createdAt = isset($t['created_at']) ? strtotime((string)$t['created_at']) : false;
+        $lastPostedAt = isset($t['last_posted_at']) ? strtotime((string)$t['last_posted_at']) : false;
+        $baseTs = ($createdAt !== false) ? (int)$createdAt : (($lastPostedAt !== false) ? (int)$lastPostedAt : 0);
+        if ($baseTs <= 0) continue;
+        $ageSec = max(0, $now - $baseTs);
+        if ($ageSec < (24 * 3600)) continue;
+
+        $idKey = (string)$topicId;
+        $seenAt = isset($seenState[$idKey]) ? (int)$seenState[$idKey] : 0;
+        if ($seenAt > 0 && ($now - $seenAt) < (6 * 3600)) {
+            // Cooldown: avoid immediate re-attempt churn on the same orphan thread.
+            continue;
+        }
+        $pool[] = array('topic' => $t, 'age_seconds' => $ageSec);
+    }
+
+    if ($pool === array()) return null;
+    usort($pool, static function ($a, $b) {
+        $aa = (int)($a['age_seconds'] ?? 0);
+        $bb = (int)($b['age_seconds'] ?? 0);
+        if ($aa === $bb) return 0;
+        return ($aa > $bb) ? -1 : 1;
+    });
+    $pool = array_slice($pool, 0, $maxScan);
+
+    foreach ($pool as $row) {
+        $topic = isset($row['topic']) && is_array($row['topic']) ? $row['topic'] : null;
+        if (!is_array($topic)) continue;
+        $topicId = (int)($topic['id'] ?? 0);
+        if ($topicId <= 0) continue;
+        $detail = fetch_json(rtrim(KONVO_BASE_URL, '/') . '/t/' . $topicId . '.json', array(
+            'Api-Key: ' . KONVO_DISCOURSE_API_KEY,
+            'Api-Username: BayMax',
+        ));
+        if (!is_array($detail) || !isset($detail['post_stream']['posts']) || !is_array($detail['post_stream']['posts'])) continue;
+        $posts = $detail['post_stream']['posts'];
+        if (count($posts) !== 1) continue;
+        $op = $posts[0] ?? null;
+        if (!is_array($op)) continue;
+        $opUsername = trim((string)($op['username'] ?? ''));
+        if ($opUsername === '' || !is_bot_user($opUsername)) continue;
+        $opCreatedAtTs = isset($op['created_at']) ? strtotime((string)$op['created_at']) : false;
+        if ($opCreatedAtTs === false) $opCreatedAtTs = isset($topic['created_at']) ? strtotime((string)$topic['created_at']) : false;
+        $ageFromOp = ($opCreatedAtTs !== false) ? max(0, $now - (int)$opCreatedAtTs) : (int)($row['age_seconds'] ?? 0);
+        if ($ageFromOp < (24 * 3600)) continue;
+        return array(
+            'topic' => $topic,
+            'detail' => $detail,
+            'age_seconds' => $ageFromOp,
+            'op_username' => $opUsername,
+        );
+    }
+    return null;
 }
 
 function find_related_internet_link($title, $body)
@@ -4264,6 +4481,11 @@ function generate_reply_text($bot, $topicTitle, $opUsername, $opRaw, $linkData, 
     $pollReasonSentence = '';
     $recentBotContext = worker_recent_other_bot_context($recentBotPosts);
     $recentSameBotContext = worker_recent_same_bot_context($recentSameBotPosts);
+    $openingMemory = worker_load_opening_memory();
+    $recentOpeningStems = worker_recent_opening_stems($openingMemory, 96, 24);
+    $recentOpeningHints = $recentOpeningStems === array()
+        ? '(none)'
+        : implode("\n", array_map(static function ($s) { return '- ' . $s; }, $recentOpeningStems));
     $saturatedContext = worker_saturated_context($saturatedThreadPhrases);
     $crossBotRule = ($recentBotPosts !== array())
         ? 'Cross-bot novelty rule: avoid repeating the same core sentence or example from recent bot replies. Keep the intent, but add a distinct angle.'
@@ -4294,6 +4516,7 @@ function generate_reply_text($bot, $topicTitle, $opUsername, $opRaw, $linkData, 
     $angleSeed = abs((int)crc32(strtolower($botUsername . '|' . $topicTitle . '|' . substr((string)$opRaw, 0, 180))));
     $distinctAngleRule = 'Distinct angle preference: ' . $angleModes[$angleSeed % count($angleModes)];
     $openingDiversityRule = worker_opening_diversity_rule($botUsername);
+    $crossThreadOpeningRule = 'Cross-thread opener rule (mandatory): do not start with an opener stem that appeared recently in other threads. Use a fresh first sentence pattern.';
     $antiAgreementRule = 'Agreement phrasing rule: never open with "Exactly", "100%", "Totally agree", "Totally,", "Totally —", or "Great point."';
     $expertiseScopeRule = worker_bot_expertise_scope_rule($botUsername);
     $cadenceMeta = worker_question_cadence_should_force_question($botUsername);
@@ -4470,7 +4693,7 @@ function generate_reply_text($bot, $topicTitle, $opUsername, $opRaw, $linkData, 
         . $botToneRule . ' ' . $botRoleRule . ' If the topic asks a question, answer in the first clause, then add a brief qualifier. '
         . 'Never end on a dangling fragment; if you shorten, keep the thought complete. '
         . 'If listing 3 or more items, use markdown bullet points with one item per line. '
-        . $pollInstruction . ' ' . $codeSnippetRule . ' ' . $freshnessRule . ' ' . $personalityRule . ' ' . $conversationalHookRule . ' ' . $colloquialLanguageRule . ' ' . $informationDensityRule . ' ' . $redditStructureRule . ' ' . $grammarRule . ' ' . $linkInstruction . ' ' . $solutionVideoRule . ' ' . $contrarianInstruction . ' ' . $memeReactionRule . ' ' . $conversationFirstRule . ' ' . $botToBotThreadRule . ' ' . $antiAcademicRule . ' ' . $crossBotRule . ' ' . $selfNoveltyRule . ' ' . $threadDiversityRule . ' ' . $distinctAngleRule . ' ' . $openingDiversityRule . ' ' . $antiAgreementRule . ' ' . $expertiseScopeRule . ' ' . $questionCadenceRule . ' ' . $uncertaintyRule . ' ' . $casualHumorRule . ' ' . $lowEffortRule . ' ' . $continuityRule . ' ' . $quirkyRule . ' ' . $learnerFollowupRule . ' ' . $deeperResearchRule . ' ' . $previousFiveVarietyRule . ' ' . $noReplyRule . ' Do not sign your post; the forum already shows your username.';
+        . $pollInstruction . ' ' . $codeSnippetRule . ' ' . $freshnessRule . ' ' . $personalityRule . ' ' . $conversationalHookRule . ' ' . $colloquialLanguageRule . ' ' . $informationDensityRule . ' ' . $redditStructureRule . ' ' . $grammarRule . ' ' . $linkInstruction . ' ' . $solutionVideoRule . ' ' . $contrarianInstruction . ' ' . $memeReactionRule . ' ' . $conversationFirstRule . ' ' . $botToBotThreadRule . ' ' . $antiAcademicRule . ' ' . $crossBotRule . ' ' . $selfNoveltyRule . ' ' . $threadDiversityRule . ' ' . $distinctAngleRule . ' ' . $openingDiversityRule . ' ' . $crossThreadOpeningRule . ' ' . $antiAgreementRule . ' ' . $expertiseScopeRule . ' ' . $questionCadenceRule . ' ' . $uncertaintyRule . ' ' . $casualHumorRule . ' ' . $lowEffortRule . ' ' . $continuityRule . ' ' . $quirkyRule . ' ' . $learnerFollowupRule . ' ' . $deeperResearchRule . ' ' . $previousFiveVarietyRule . ' ' . $noReplyRule . ' Do not sign your post; the forum already shows your username.';
     $user = "Topic title: {$topicTitle}\n"
         . "OP username: @{$opUsername}\n"
         . "OP content:\n" . substr($opRaw, 0, 1200) . "\n\n"
@@ -4479,6 +4702,7 @@ function generate_reply_text($bot, $topicTitle, $opUsername, $opRaw, $linkData, 
         . (trim((string)$recentThreadContext) !== '' ? ((string)$recentThreadContext . "\n\n") : '')
         . $recentBotContext . "\n\n"
         . $recentSameBotContext . "\n\n"
+        . "Recent cross-thread opening stems to avoid:\n" . $recentOpeningHints . "\n\n"
         . $saturatedContext . "\n\n"
         . $pollContextBlock . "\n\n"
         . "Before finalizing, read every existing response in the thread and identify one specific new detail to add. Do not summarize existing responses. Different words, same idea is not additive.\n\n"
@@ -4505,12 +4729,12 @@ function generate_reply_text($bot, $topicTitle, $opUsername, $opRaw, $linkData, 
     );
 
     if (!$res['ok'] || !isset($res['body']['choices'][0]['message']['content'])) {
-        return build_contextual_fallback_reply($topicTitle, $opRaw, $signature, $linkData, $shouldIncludeLink);
+        return '';
     }
 
     $txt = trim((string)$res['body']['choices'][0]['message']['content']);
     if ($txt === '') {
-        return build_contextual_fallback_reply($topicTitle, $opRaw, $signature, $linkData, $shouldIncludeLink);
+        return '';
     }
     if (!$learnerFollowupMode && $allowNoReply && preg_match('/^\s*\[\[NO_REPLY\]\]\s*$/i', $txt)) {
         return '';
@@ -4528,6 +4752,53 @@ function generate_reply_text($bot, $topicTitle, $opUsername, $opRaw, $linkData, 
     }
     if ($isSimpleClarification) {
         $txt = worker_tighten_simple_clarification_reply($txt, $signature);
+    }
+
+    $targetOpening = strtolower(trim((string)worker_extract_opening_line($opRaw)));
+    $replyOpening = strtolower(trim((string)worker_extract_opening_line($txt)));
+    $normTarget = strtolower(trim((string)preg_replace('/\s+/', ' ', (string)preg_replace('/[^a-z0-9]+/i', ' ', (string)$opRaw))));
+    $normReply = strtolower(trim((string)preg_replace('/\s+/', ' ', (string)preg_replace('/[^a-z0-9]+/i', ' ', (string)$txt))));
+    $targetTokens = worker_tokenize_for_similarity((string)$opRaw);
+    $replyTokens = worker_tokenize_for_similarity((string)$txt);
+    $targetLead = implode(' ', array_slice($targetTokens, 0, 10));
+    $replyLead = implode(' ', array_slice($replyTokens, 0, 10));
+    $prefixClone = ($normReply !== '' && strlen($normReply) >= 40 && $normTarget !== '' && strpos($normTarget, $normReply) === 0);
+    $leadClone = ($targetLead !== '' && $replyLead !== '' && $targetLead === $replyLead);
+    $looksMimic = worker_is_probable_duplicate_text($txt, $opRaw, 0.44)
+        || ($targetOpening !== '' && $replyOpening !== '' && $targetOpening === $replyOpening)
+        || $prefixClone
+        || $leadClone;
+    if ($looksMimic) {
+        $deMimic = worker_rewrite_non_mimic_reply_with_llm($bot, $topicTitle, $opRaw, $txt, (string)$recentThreadContext);
+        if ($deMimic !== '') {
+            $txt = $deMimic;
+            $replyOpening = strtolower(trim((string)worker_extract_opening_line($txt)));
+            $normReply = strtolower(trim((string)preg_replace('/\s+/', ' ', (string)preg_replace('/[^a-z0-9]+/i', ' ', (string)$txt))));
+            $replyTokens = worker_tokenize_for_similarity((string)$txt);
+            $replyLead = implode(' ', array_slice($replyTokens, 0, 10));
+            $prefixClone = ($normReply !== '' && strlen($normReply) >= 40 && $normTarget !== '' && strpos($normTarget, $normReply) === 0);
+            $leadClone = ($targetLead !== '' && $replyLead !== '' && $targetLead === $replyLead);
+            $looksMimic = worker_is_probable_duplicate_text($txt, $opRaw, 0.44)
+                || ($targetOpening !== '' && $replyOpening !== '' && $targetOpening === $replyOpening)
+                || $prefixClone
+                || $leadClone;
+        }
+        if ($looksMimic) {
+            return '';
+        }
+    }
+
+    $recentStemsForGate = worker_recent_opening_stems(worker_load_opening_memory(), 96, 24);
+    $replyStem = worker_opening_stem($txt);
+    if (worker_opening_stem_reused($replyStem, $recentStemsForGate)) {
+        $deMimic = worker_rewrite_non_mimic_reply_with_llm($bot, $topicTitle, $opRaw, $txt, (string)$recentThreadContext);
+        if ($deMimic !== '') {
+            $txt = $deMimic;
+            $replyStem = worker_opening_stem($txt);
+        }
+        if (worker_opening_stem_reused($replyStem, $recentStemsForGate)) {
+            return '';
+        }
     }
 
     $txt = worker_markdown_code_integrity_pass($txt);
@@ -4929,13 +5200,17 @@ function worker_generate_minimal_fallback_reply($bot, $topicTitle, $targetUserna
     $model = worker_model_for_task($isTechnical ? 'reply_generation_technical' : 'reply_generation', array('technical' => $isTechnical));
     if (!is_string($model) || trim($model) === '' || KONVO_OPENAI_API_KEY === '') return '';
 
+    $recentOpeningHints = implode("\n", array_map(static function ($s) { return '- ' . $s; }, worker_recent_opening_stems(worker_load_opening_memory(), 96, 20)));
+    if (trim((string)$recentOpeningHints) === '') $recentOpeningHints = '(none)';
     $system = trim((string)$soul)
         . ' Write a short forum reply that adds one clear useful point.'
         . ' Keep it human, casual, and concise.'
         . ' Use 1-2 short sentences only, no headings, no bullets, no fluff, and no question marks.'
+        . ' Do not mimic or restate the opening phrase from the target post.'
+        . ' Do not start with any opener stem listed in the avoid-list.'
         . ' If technical, keep it precise and practical.'
         . ' Do not sign your post; the forum already shows your username.';
-    $user = "Topic title: {$topicTitle}\n\nTarget post by @{$targetUsername}:\n{$targetRaw}\n\nWrite the fallback reply now.";
+    $user = "Topic title: {$topicTitle}\n\nTarget post by @{$targetUsername}:\n{$targetRaw}\n\nAvoid these recent opener stems:\n{$recentOpeningHints}\n\nWrite the fallback reply now.";
     $res = post_json(
         'https://api.openai.com/v1/chat/completions',
         array(
@@ -4961,6 +5236,10 @@ function worker_generate_minimal_fallback_reply($bot, $topicTitle, $targetUserna
     $txt = worker_markdown_code_integrity_pass($txt);
     $txt = worker_normalize_code_fence_spacing($txt);
     $txt = worker_strip_foreign_bot_name_noise($txt, $botUsername);
+    $replyStem = worker_opening_stem($txt);
+    if (worker_opening_stem_reused($replyStem, worker_recent_opening_stems(worker_load_opening_memory(), 96, 20))) {
+        return '';
+    }
     $txt = normalize_signature($txt, $signature);
     return trim((string)$txt);
 }
@@ -4991,7 +5270,15 @@ $consensusState = worker_consensus_load();
 $consensusPick = worker_pick_consensus_topic($latest['topic_list']['topics'], $consensusState, $seen);
 $consensusFlowActive = is_array($consensusPick) && isset($consensusPick['topic']) && is_array($consensusPick['topic']);
 $consensusTopicState = $consensusFlowActive && isset($consensusPick['state']) && is_array($consensusPick['state']) ? $consensusPick['state'] : array();
-$topic = $consensusFlowActive ? $consensusPick['topic'] : pick_candidate_topic($latest['topic_list']['topics'], $seen);
+$orphanPriority = worker_pick_orphan_bot_topic_over_24h($latest['topic_list']['topics'], $seen, 30);
+$forceOrphanReviveMode = is_array($orphanPriority)
+    && isset($orphanPriority['topic'])
+    && is_array($orphanPriority['topic']);
+$topic = $forceOrphanReviveMode
+    ? $orphanPriority['topic']
+    : ($consensusFlowActive
+        ? $consensusPick['topic']
+        : pick_candidate_topic($latest['topic_list']['topics'], $seen));
 if (!is_array($topic)) {
     out_json(200, array('ok' => true, 'posted' => false, 'reason' => 'No eligible recent topics found.'));
 }
@@ -4999,10 +5286,12 @@ if (!is_array($topic)) {
 $topicId = (int)$topic['id'];
 $topicTitle = isset($topic['title']) ? trim((string)$topic['title']) : 'Untitled topic';
 
-$topicDetail = fetch_json(rtrim(KONVO_BASE_URL, '/') . '/t/' . $topicId . '.json', array(
-    'Api-Key: ' . KONVO_DISCOURSE_API_KEY,
-    'Api-Username: BayMax',
-));
+$topicDetail = (is_array($orphanPriority) && isset($orphanPriority['detail']) && is_array($orphanPriority['detail']))
+    ? $orphanPriority['detail']
+    : fetch_json(rtrim(KONVO_BASE_URL, '/') . '/t/' . $topicId . '.json', array(
+        'Api-Key: ' . KONVO_DISCOURSE_API_KEY,
+        'Api-Username: BayMax',
+    ));
 if (!is_array($topicDetail) || !isset($topicDetail['post_stream']['posts']) || !is_array($topicDetail['post_stream']['posts']) || count($topicDetail['post_stream']['posts']) === 0) {
     out_json(500, array('ok' => false, 'error' => 'Could not fetch topic detail.', 'topic_id' => $topicId));
 }
@@ -5013,6 +5302,26 @@ $recentHasHuman = worker_recent_has_human($posts, 6);
 $opPost = $posts[0];
 $latestPost = $posts[count($posts) - 1];
 $opUsername = isset($opPost['username']) ? (string)$opPost['username'] : '';
+
+// Safety net: if the selected topic is itself an unreplied bot OP older than 24h,
+// force orphan-revive behavior even if initial picker path missed it.
+if (!$forceOrphanReviveMode && count($posts) === 1 && is_bot_user($opUsername)) {
+    $opTs = isset($opPost['created_at']) ? strtotime((string)$opPost['created_at']) : false;
+    if ($opTs === false && isset($topic['created_at'])) {
+        $opTs = strtotime((string)$topic['created_at']);
+    }
+    $opAgeSec = ($opTs !== false) ? max(0, time() - (int)$opTs) : 0;
+    if ($opAgeSec >= (24 * 3600)) {
+        $forceOrphanReviveMode = true;
+        $orphanPriority = array(
+            'topic' => $topic,
+            'detail' => $topicDetail,
+            'age_seconds' => $opAgeSec,
+            'op_username' => $opUsername,
+        );
+    }
+}
+
 $threadOpRaw = post_content_text($opPost);
 $latestUsername = isset($latestPost['username']) ? (string)$latestPost['username'] : $opUsername;
 $targetRaw = post_content_text($latestPost);
@@ -5496,6 +5805,12 @@ if (!$allowNonTechnicalCodeSnippetsTop) {
 $duplicateGate = $learnerFollowupModeTop
     ? array('skip' => false, 'reason' => '')
     : worker_detect_duplicate_reply($replyText, $targetRaw, $recentOtherBotPosts, $recentSameBotPosts);
+if (!empty($duplicateGate['skip']) && $forceOrphanReviveMode) {
+    $dupReason = (string)($duplicateGate['reason'] ?? '');
+    if ($dupReason !== 'duplicate_of_target_post') {
+        $duplicateGate = array('skip' => false, 'reason' => 'forced_orphan_revive_mode');
+    }
+}
 if (!empty($duplicateGate['skip'])) {
     if (!$fallbackUsed) {
         out_json(200, array(
@@ -5522,6 +5837,9 @@ $newDetailsGate = $learnerFollowupModeTop
     : ($forceLowEffortCadenceTop
         ? array('applied' => false, 'adds_new_details' => true, 'reason' => 'low_effort_cadence_override')
         : worker_reply_adds_new_details_pass($replyText, $posts, max(1, count($posts))));
+if (empty($newDetailsGate['adds_new_details']) && $forceOrphanReviveMode) {
+    $newDetailsGate = array('applied' => false, 'adds_new_details' => true, 'reason' => 'forced_orphan_revive_mode');
+}
 if (empty($newDetailsGate['adds_new_details'])) {
     if (!$fallbackUsed) {
         out_json(200, array(
@@ -5581,6 +5899,12 @@ if ($dryRun) {
             'active' => $consensusFlowActive,
             'state' => $consensusTopicState,
         ),
+        'orphan_priority' => array(
+            'active' => $forceOrphanReviveMode,
+            'age_seconds' => $forceOrphanReviveMode ? (int)($orphanPriority['age_seconds'] ?? 0) : 0,
+            'op_username' => $forceOrphanReviveMode ? (string)($orphanPriority['op_username'] ?? '') : '',
+            'force_post' => $forceOrphanReviveMode,
+        ),
         'selected_bot' => $bot,
         'recent_other_bot_posts' => $recentOtherBotPosts,
         'bot_streak_guard' => array(
@@ -5639,6 +5963,10 @@ if (!$postRes['ok']) {
 $postNumber = isset($postRes['body']['post_number']) ? (int)$postRes['body']['post_number'] : 1;
 $postUrl = rtrim(KONVO_BASE_URL, '/') . '/t/' . $topicId . '/' . $postNumber;
 worker_question_cadence_record_post((string)($bot['username'] ?? ''));
+$postedStem = worker_opening_stem((string)$replyText);
+if ($postedStem !== '') {
+    worker_remember_opening_stem($postedStem, (int)$topicId, (string)($bot['username'] ?? ''));
+}
 $seen[(string)$topicId] = time();
 save_seen_topics($seen);
 if ($consensusFlowActive) {
@@ -5687,6 +6015,12 @@ out_json(200, array(
     'consensus_flow' => array(
         'active' => $consensusFlowActive,
         'state' => $consensusTopicState,
+    ),
+    'orphan_priority' => array(
+        'active' => $forceOrphanReviveMode,
+        'age_seconds' => $forceOrphanReviveMode ? (int)($orphanPriority['age_seconds'] ?? 0) : 0,
+        'op_username' => $forceOrphanReviveMode ? (string)($orphanPriority['op_username'] ?? '') : '',
+        'force_post' => $forceOrphanReviveMode,
     ),
     'selected_bot' => $bot,
     'recent_other_bot_posts' => $recentOtherBotPosts,
