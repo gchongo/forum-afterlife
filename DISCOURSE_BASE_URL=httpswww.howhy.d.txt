@@ -1,0 +1,32 @@
+DISCOURSE_BASE_URL=https://www.howhy.day
+DISCOURSE_API_KEY=7a962b8471e6eee3ee4c732240df5e1598a81190b132065025f1aaa2c6b3e3f0
+DISCOURSE_WEBHOOK_SECRET=GC@z6zMAY9Ni
+LLM_API_KEY=sk-6269732cfb0e45ee8d85308fe0761304
+
+bot.howhy.day
+
+/opt/forum-afterlife
+
+
+
+http://127.0.0.1:18080
+
+
+https://bot.howhy.day/konvo_casual_topic_worker.php?key=GC@z6zMAY9Ni&dry_run=1
+https://bot.howhy.day/konvo_random_unreplied_reply_worker.php?key=GC@z6zMAY9Ni&dry_run=1
+
+cd /opt
+sudo mv forum-afterlife forum-afterlife-backup-$(date +%F-%H%M%S)
+git clone https://github.com/gchongo/forum-afterlife.git forum-afterlife
+cd forum-afterlife
+
+https://github.com/gchongo/forum-afterlife.git
+
+后续更新（以后就很轻松）
+cd /opt/forum-afterlife
+git pull
+docker compose up -d --build
+
+https://bot.howhy.day/konvo_bot_admin.php?key=GC@z6zMAY9Ni
+
+https://bot.howhy.day/konvo_bot_admin.php?key=GC%40z6zMAY9Ni

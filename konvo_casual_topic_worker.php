@@ -967,35 +967,42 @@ function casual_looks_too_technical(string $text): bool
     return (bool)preg_match('/\b(javascript|typescript|css|html|react|vue|angular|api endpoint|database schema|backend|frontend|docker|kubernetes|ci\/cd|compiler|runtime|stack trace|queryselector|npm|package\.json|php warning|sql query)\b/i', $t);
 }
 
-function casual_validate_generated_topic(string $title, string $raw): array
+function casual_validate_generated_topic(string $title, string $raw, bool $historyMode = false): array
 {
     $title = trim($title);
     $raw = trim($raw);
 
-    if ($title === '' || strlen($title) < 8) {
+    if ($title === '' || strlen($title) < 6) {
         return array('ok' => false, 'error' => 'title too short');
     }
-    if (strlen($title) > 88) {
+    if (strlen($title) > ($historyMode ? 120 : 88)) {
         return array('ok' => false, 'error' => 'title too long');
     }
-    if ($raw === '' || strlen($raw) < 40) {
+    if ($raw === '' || strlen($raw) < ($historyMode ? 300 : 40)) {
         return array('ok' => false, 'error' => 'body too short');
     }
-    if (strlen($raw) > 520) {
+    if (strlen($raw) > ($historyMode ? 3800 : 2200)) {
         return array('ok' => false, 'error' => 'body too long');
     }
-    if (casual_has_controversial_signals($title . "\n" . $raw)) {
+    if (!$historyMode && casual_has_controversial_signals($title . "\n" . $raw)) {
         return array('ok' => false, 'error' => 'topic looked controversial');
     }
-    if (casual_looks_too_technical($title . "\n" . $raw)) {
-        return array('ok' => false, 'error' => 'topic looked too technical');
-    }
-    // Title can be a statement; body may include a question, but it is not mandatory.
-    if (!casual_is_allowed_topic_scope($title . "\n" . $raw)) {
-        return array('ok' => false, 'error' => 'topic must stay within tech/design/gaming/business/dev-culture scope');
-    }
-    if (!casual_has_depth_signal($title . "\n" . $raw)) {
-        return array('ok' => false, 'error' => 'topic did not show enough depth');
+    if ($historyMode) {
+        if (!casual_is_chinese_like($title . "\n" . $raw)) {
+            return array('ok' => false, 'error' => 'history mode requires Chinese output');
+        }
+        if (casual_count_han_chars($raw) < 500) {
+            return array('ok' => false, 'error' => 'history mode body must be at least 500 Chinese chars');
+        }
+        $paraCount = preg_match_all('/\n\s*\n/u', $raw, $m);
+        $blocks = (is_int($paraCount) ? $paraCount : 0) + 1;
+        if ($blocks < 3 || $blocks > 6) {
+            return array('ok' => false, 'error' => 'history mode needs 3-6 paragraphs');
+        }
+    } else {
+        if (strlen($raw) < 80) {
+            return array('ok' => false, 'error' => 'body too short for meaningful discussion');
+        }
     }
     if (strpos($raw, '```') !== false) {
         return array('ok' => false, 'error' => 'code block not expected for casual topic');
@@ -1158,37 +1165,61 @@ function casual_pick_category_with_llm(string $title, string $raw, array $bot = 
 function casual_seed_topic_pool(): array
 {
     return array(
-        'game tutorials vs discovery',
-        'retro game difficulty and modern expectations',
-        'sci-fi computer assistants vs real AI tools',
-        'shipping speed vs code quality',
-        'design polish vs product momentum',
-        'remote work rituals for deep focus',
-        'feature creep vs simplicity',
-        'creator tools that remove too much friction',
-        'automation convenience vs skill atrophy',
-        'team ownership vs platform standardization',
-        'ui clarity vs playful ambiguity',
-        'onboarding speed vs long-term mastery',
-        'engineering culture and review quality',
-        'product metrics vs user delight',
-        'ai copilots and developer confidence',
-        'small-batch software vs giant all-in-one apps',
-        'creative flow interruptions from notifications',
-        'debugging habits that actually scale',
-        'indie game design tradeoffs',
-        'animation polish vs performance budgets',
-        'community trust and transparent product decisions',
-        'open-source dependency risk vs shipping pressure',
-        'toolchain churn and developer fatigue',
-        'healthy defaults vs user control',
-        'personal productivity systems that stick',
+        '一个长期但常被忽略的结构性问题',
+        '一个常见误解与现实之间的差距',
+        '同一制度在不同时期为何效果不同',
+        '局部优化与整体结果之间的错位',
+        '表面现象背后的治理与激励逻辑',
+        '个人体验与系统约束之间的张力',
+        '看似偶然现象背后的长期趋势',
+        '跨时期比较里最值得重看的变量',
     );
 }
 
-function casual_pick_random_seed_topic(array $recentLocal, array $recentForumTitles): string
+function casual_history_seed_topic_pool(): array
 {
-    $pool = casual_seed_topic_pool();
+    return array(
+        '唐代两税法为什么能稳定财政一段时间',
+        '明代财政对白银依赖加深的制度原因',
+        '宋代城市化与市场网络扩张的互动关系',
+        '汉代郡县制在地方治理中的实际运行逻辑',
+        '科举制度对地方社会流动的真实影响边界',
+        '晚清新政中的财政与军政重组难点',
+        '明清时期漕运体系与国家治理成本',
+        '边疆治理中军政与财政如何互相牵制',
+        '地方精英与国家权力在基层的协作与冲突',
+        '史料叙事与制度现实之间的偏差从何而来',
+    );
+}
+
+function casual_count_han_chars(string $text): int
+{
+    $ok = preg_match_all('/\p{Han}/u', $text, $m);
+    return is_int($ok) ? $ok : 0;
+}
+
+function casual_is_chinese_like(string $text): bool
+{
+    $han = casual_count_han_chars($text);
+    if ($han < 40) {
+        return false;
+    }
+    $latin = preg_match_all('/[A-Za-z]/', $text, $m2);
+    $latinCount = is_int($latin) ? $latin : 0;
+    return $latinCount <= max(30, (int)floor($han * 0.25));
+}
+
+function casual_is_history_mode(array $bot, int $categoryId): bool
+{
+    $u = strtolower(trim((string)($bot['username'] ?? '')));
+    return $categoryId === (int)KONVO_HISTORY_CATEGORY_ID || $u === 'higuyer';
+}
+
+function casual_pick_random_seed_topic(array $recentLocal, array $recentForumTitles, array $pool = array()): string
+{
+    if ($pool === array()) {
+        $pool = casual_seed_topic_pool();
+    }
     $recentTitles = array();
     foreach ($recentLocal as $item) {
         if (!is_array($item)) continue;
@@ -1218,7 +1249,7 @@ function casual_pick_random_seed_topic(array $recentLocal, array $recentForumTit
     return (string)$candidates[0];
 }
 
-function casual_generate_with_llm(array $bot, string $signature, array $recent, array $recentForumTitles, bool $strict, string $extraAvoidance = '', array $lane = array()): array
+function casual_generate_with_llm(array $bot, string $signature, array $recent, array $recentForumTitles, bool $strict, string $extraAvoidance = '', array $lane = array(), int $categoryId = 0): array
 {
     $botName = trim((string)($bot['name'] ?? 'BAI'));
     $soulKey = trim((string)($bot['soul_key'] ?? strtolower($botName)));
@@ -1228,30 +1259,50 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
     );
     $recentHints = casual_recent_hint_lines($recent);
     $recentOpeningHints = casual_recent_opening_stems($recent, 14);
-    $seedTopic = casual_pick_random_seed_topic($recent, $recentForumTitles);
+    $historyMode = casual_is_history_mode($bot, $categoryId);
+    $seedPool = $historyMode ? casual_history_seed_topic_pool() : casual_seed_topic_pool();
+    $seedTopic = casual_pick_random_seed_topic($recent, $recentForumTitles, $seedPool);
 
-    $system = ($soulPrompt !== '' ? "Bot voice and personality guidance:\n{$soulPrompt}\n\n" : '')
-        . 'You generate a single casual forum discussion starter for humans. '
-        . 'Return ONLY JSON with this schema: '
-        . '{"plan_mood":"...","plan_angle":"...","plan_posting_intent":"...","plan_lane":"...","title":"...","raw":"..."}. '
-        . 'Rules: turn the seed topic into one concrete observation and invite discussion naturally. '
-        . 'Avoid politics, violence, tragedy, culture-war bait, link dumps, and coding help requests. '
-        . 'Use natural human language that sounds like a real forum member. '
-        . 'Title: 6-13 words, complete thought, statement style by default, no colon, no clickbait, no emoji. '
-        . 'Body: 2-3 short sentences, max 2 short paragraphs. '
-        . 'One question in the body is allowed when useful, but do not force one every time. '
-        . 'No links, no hashtags, no code blocks. '
-        . 'Do not sign the post; Discourse already shows the author username. '
-        . 'Uniqueness is mandatory: do not paraphrase recent topics.';
+    if ($historyMode) {
+        $system = ($soulPrompt !== '' ? "Bot voice and personality guidance:\n{$soulPrompt}\n\n" : '')
+            . '你要生成一篇中文历史论坛话题帖。'
+            . '只返回 JSON，结构为：'
+            . '{"plan_mood":"...","plan_angle":"...","plan_posting_intent":"...","plan_lane":"history","title":"...","raw":"..."}。'
+            . '硬性规则：标题必须中文；正文必须中文；正文不少于500个中文字符；3到6段；使用 Markdown。'
+            . '主题限定：中国历史（制度、财政、军事、地方治理、科举、土地、交通、城市、思想、文物考古等）。'
+            . '不要虚构史实、引文、数据、书目、网址。不要写历史小说、段子、阴谋论、标题党。'
+            . '结尾提出1到2个具体、有讨论价值的问题。'
+            . '不要输出任何解释文字，只输出 JSON。';
 
-    $user = "Seed topic: {$seedTopic}\n"
-        . "Generate one post from this seed as an observation-first discussion starter.\n"
-        . "Set plan_lane to a short lane label that best fits this seed.\n"
-        . "Recent topics to avoid repeating:\n{$recentHints}\n\n"
-        . "Recent opening stems to avoid reusing:\n{$recentOpeningHints}\n\n"
-        . ($strict ? "This is a regeneration attempt. Pick a clearly different angle than prior drafts.\n" : '')
-        . ($extraAvoidance !== '' ? ("Avoidance hint: " . trim($extraAvoidance) . "\n") : '')
-        . "Return JSON only.";
+        $user = "种子主题：{$seedTopic}\n"
+            . "请围绕该主题写一篇中文历史讨论帖。\n"
+            . "避免与近期帖子重复：\n{$recentHints}\n\n"
+            . ($strict ? "这是重试，请明显更换切入角度。\n" : '')
+            . ($extraAvoidance !== '' ? ("额外避免点：" . trim($extraAvoidance) . "\n") : '')
+            . "输出 JSON。";
+    } else {
+        $system = ($soulPrompt !== '' ? "Bot voice and personality guidance:\n{$soulPrompt}\n\n" : '')
+            . 'You generate a single forum discussion starter for humans. '
+            . 'Return ONLY JSON with this schema: '
+            . '{"plan_mood":"...","plan_angle":"...","plan_posting_intent":"...","plan_lane":"...","title":"...","raw":"..."}. '
+            . 'SOUL rules have higher priority than generic defaults. '
+            . 'Use natural human language that matches the bot SOUL. '
+            . 'Title should be specific and natural. '
+            . 'Body should have substance (normally 2-5 paragraphs unless SOUL says otherwise). '
+            . 'You may use Chinese or other language when SOUL/category implies it. '
+            . 'No links, no hashtags, no code blocks unless SOUL explicitly requires them. '
+            . 'Do not sign the post; Discourse already shows the author username. '
+            . 'Uniqueness is mandatory: do not paraphrase recent topics.';
+
+        $user = "参考主题（可改写或忽略）：{$seedTopic}\n"
+            . "请按该 bot 的 SOUL 生成一篇可发帖的话题内容。\n"
+            . "plan_lane 用一个简短标签概括方向。\n"
+            . "Recent topics to avoid repeating:\n{$recentHints}\n\n"
+            . "Recent opening stems to avoid reusing:\n{$recentOpeningHints}\n\n"
+            . ($strict ? "这是重试，请明显更换切入角度。\n" : '')
+            . ($extraAvoidance !== '' ? ("Avoidance hint / 避免点: " . trim($extraAvoidance) . "\n") : '')
+            . "Return JSON only.";
+    }
 
     $payload = array(
         'model' => konvo_model_for_task('casual_topic'),
@@ -1289,7 +1340,7 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
         return array('ok' => false, 'error' => 'Model JSON missing title/raw', 'parsed' => $obj);
     }
 
-    $valid = casual_validate_generated_topic($title, $raw);
+    $valid = casual_validate_generated_topic($title, $raw, $historyMode);
     if (!$valid['ok']) {
         return array('ok' => false, 'error' => (string)($valid['error'] ?? 'validation failed'), 'title' => $title, 'raw' => $raw);
     }
@@ -1429,7 +1480,7 @@ for ($i = 0; $i < 4; $i++) {
         break;
     }
     $strict = $i > 0;
-    $res = casual_generate_with_llm($bot, $signature, $recent, $recentForumTitles, $strict, $extraAvoidance, $lane);
+    $res = casual_generate_with_llm($bot, $signature, $recent, $recentForumTitles, $strict, $extraAvoidance, $lane, $categoryId);
     if (!empty($res['ok'])) {
         $tooSimilar = casual_title_too_similar_to_recent((string)($res['title'] ?? ''), $recentForumTitles);
         if ($tooSimilar) {
