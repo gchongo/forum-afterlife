@@ -34,7 +34,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v4');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v5');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -1228,7 +1228,15 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
 
     $valid = konvo_soul_validate_topic($title, $raw, $rules, $strict);
     if (!$valid['ok']) {
-        return array('ok' => false, 'error' => (string)($valid['error'] ?? 'validation failed'), 'title' => $title, 'raw' => $raw);
+        return array(
+            'ok' => false,
+            'error' => (string)($valid['error'] ?? 'validation failed'),
+            'title' => $title,
+            'raw' => $raw,
+            'han_chars' => konvo_soul_count_han_chars($raw),
+            'latin_chars' => konvo_soul_count_latin_chars($title . "\n" . $raw),
+            'validation' => $valid,
+        );
     }
 
     return array(
@@ -1459,18 +1467,30 @@ for ($i = 0; $i < $maxAttempts; $i++) {
 
 if (!is_array($generated) || empty($generated['ok'])) {
     $errors = array();
+    $attemptDetails = array();
     foreach ($attempts as $a) {
         $errors[] = isset($a['error']) ? (string)$a['error'] : 'unknown generation failure';
+        $attemptDetails[] = array(
+            'error' => isset($a['error']) ? (string)$a['error'] : 'unknown generation failure',
+            'han_chars' => isset($a['han_chars']) ? (int)$a['han_chars'] : null,
+            'latin_chars' => isset($a['latin_chars']) ? (int)$a['latin_chars'] : null,
+            'title_preview' => isset($a['title']) ? mb_substr((string)$a['title'], 0, 80, 'UTF-8') : '',
+            'raw_preview' => isset($a['raw']) ? mb_substr((string)$a['raw'], 0, 160, 'UTF-8') : '',
+        );
     }
     casual_out(500, array(
         'ok' => false,
         'error' => 'Failed to generate a unique SOUL-compliant topic; nothing was posted.',
         'attempt_errors' => $errors,
+        'attempt_details' => $attemptDetails,
         'attempt_count' => count($attempts),
         'fast_mode' => $fastMode,
         'worker_build' => (string)KONVO_WORKER_BUILD,
+        'soul_rules' => $soulRulesRun,
+        'soul_loaded' => strlen($soulPromptRun) > 0,
+        'soul_chars' => strlen($soulPromptRun),
         'elapsed_seconds' => round(microtime(true) - $requestStartTs, 2),
-        'hint' => 'Template fallback is disabled. Fix LLM_API_KEY/quota, or wait and retry. Verify worker_build on server matches latest git pull.',
+        'hint' => 'Check attempt_details.han_chars (0 = model returned English or PHP Han count issue). Verify LLM_API_KEY and souls/*.SOUL.md in container.',
     ));
 }
 

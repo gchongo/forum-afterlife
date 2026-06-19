@@ -13,7 +13,20 @@ function konvo_soul_prompt_for_topic(array $bot): string
 
 function konvo_soul_count_han_chars(string $text): int
 {
+    if ($text === '') {
+        return 0;
+    }
     $ok = preg_match_all('/\p{Han}/u', $text, $m);
+    if (is_int($ok) && $ok > 0) {
+        return $ok;
+    }
+    $fallback = preg_match_all('/[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}\x{f900}-\x{faFF}]/u', $text, $m2);
+    return is_int($fallback) ? $fallback : 0;
+}
+
+function konvo_soul_count_latin_chars(string $text): int
+{
+    $ok = preg_match_all('/[A-Za-z]/', $text, $m);
     return is_int($ok) ? $ok : 0;
 }
 
@@ -23,8 +36,7 @@ function konvo_soul_is_chinese_like(string $text): bool
     if ($han < 40) {
         return false;
     }
-    $latin = preg_match_all('/[A-Za-z]/', $text, $m2);
-    $latinCount = is_int($latin) ? $latin : 0;
+    $latinCount = konvo_soul_count_latin_chars($text);
     return $latinCount <= max(30, (int)floor($han * 0.25));
 }
 
@@ -201,6 +213,10 @@ function konvo_soul_build_topic_system_prompt(string $soulPrompt, array $rules, 
         . '{"plan_mood":"...","plan_angle":"...","plan_posting_intent":"...","plan_lane":"...","title":"...","raw":"..."}。';
     $parts[] = 'SOUL 中的所有语言、长度、结构、风格、禁区、准确性规则，优先于任何默认行为。';
     $parts[] = '若 SOUL 要求中文科普长文，则 title 与 raw 必须中文，raw 必须超过 500 个中文字符，且 3 到 6 段。';
+    if (($rules['language'] ?? 'any') === 'zh') {
+        $parts[] = '【语言锁定】title 与 raw 必须全部使用简体中文书写，禁止英文正文或英文标题。'
+            . 'plan_* 字段可简短英文，但 title/raw 不得出现英文句子。';
+    }
     $parts[] = '若 SOUL 要求陈述句结尾，则 title 与 raw 全文都不得出现疑问句、问号、或“大家怎么看/欢迎讨论/如果方便请分享”等互动式收束。';
     $parts[] = '内容必须真实、非虚构；不得编造事实、数据、引语、来源、书目或网址，除非 SOUL 明确允许。';
     $parts[] = '严禁重复：不得与近期论坛话题或本 bot 近期帖子重复，也不得仅改写标题、换同义词或重排段落。必须提供明显不同的主题角度。';
@@ -273,14 +289,42 @@ function konvo_soul_build_topic_user_prompt(
     if ($recentOpeningHints !== '') {
         $lines[] = "避免复用这些开头：\n{$recentOpeningHints}";
     }
+    if (($rules['language'] ?? 'any') === 'zh') {
+        $lines[] = '【再次强调】title 与 raw 必须全部是简体中文，正文至少 500 个汉字，不得输出英文段落。';
+    }
     if ($strict) {
         $lines[] = '这是重试，请明显更换切入角度，并更严格地遵守 SOUL。';
     }
     if ($extraAvoidance !== '') {
         $lines[] = '额外避免点：' . trim($extraAvoidance);
+        $retryHint = konvo_soul_retry_hint_for_error($extraAvoidance);
+        if ($retryHint !== '') {
+            $lines[] = $retryHint;
+        }
     }
     $lines[] = '输出 JSON。';
     return implode("\n\n", $lines);
+}
+
+function konvo_soul_retry_hint_for_error(string $errorBlob): string
+{
+    $e = strtolower(trim($errorBlob));
+    if ($e === '') {
+        return '';
+    }
+    if (str_contains($e, 'chinese output') || str_contains($e, 'chinese chars')) {
+        return '【修正要求】上次生成不合格：必须用简体中文写 title 和 raw，正文至少 500 个汉字，3 到 6 段，禁止英文正文。';
+    }
+    if (str_contains($e, 'question') || str_contains($e, 'interactive')) {
+        return '【修正要求】不得使用问号、疑问句或“大家怎么看/欢迎讨论”等互动式收束，结尾必须是陈述句。';
+    }
+    if (str_contains($e, 'paragraph')) {
+        return '【修正要求】正文必须分成 3 到 6 段，段与段之间空一行。';
+    }
+    if (str_contains($e, 'too similar') || str_contains($e, 'uniqueness')) {
+        return '【修正要求】必须换一个完全不同的主题角度，不得改写近期已有话题。';
+    }
+    return '';
 }
 
 function konvo_soul_text_has_question(string $text): bool
@@ -346,7 +390,17 @@ function konvo_soul_validate_topic(string $title, string $raw, array $rules, boo
 
     $language = (string)($rules['language'] ?? 'any');
     if ($language === 'zh' && !konvo_soul_is_chinese_like($title . "\n" . $raw)) {
-        return array('ok' => false, 'error' => 'SOUL requires Chinese output');
+        $hanTotal = konvo_soul_count_han_chars($title . "\n" . $raw);
+        $hanBody = konvo_soul_count_han_chars($raw);
+        $latinTotal = konvo_soul_count_latin_chars($title . "\n" . $raw);
+        return array(
+            'ok' => false,
+            'error' => 'SOUL requires Chinese output',
+            'han_chars' => $hanBody,
+            'han_total' => $hanTotal,
+            'latin_chars' => $latinTotal,
+            'title_preview' => mb_substr($title, 0, 80, 'UTF-8'),
+        );
     }
 
     $minHan = (int)($rules['min_han_chars'] ?? 0);
@@ -496,11 +550,11 @@ function konvo_soul_topic_fallback(array $bot, array $rules, string $seedTopic =
 
 function konvo_soul_han_compact(string $text): string
 {
-    $ok = preg_match_all('/\p{Han}/u', $text, $m);
-    if (!is_int($ok) || $ok === 0) {
+    if (konvo_soul_count_han_chars($text) === 0) {
         return '';
     }
-    return implode('', $m[0]);
+    preg_match_all('/[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}\x{f900}-\x{faFF}]/u', $text, $m);
+    return implode('', $m[0] ?? array());
 }
 
 function konvo_soul_normalize_title_key(string $title): string
