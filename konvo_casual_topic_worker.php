@@ -33,7 +33,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v11');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v13');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -962,10 +962,10 @@ function casual_append_quirky_media_before_signature(string $raw, string $signat
 
 function casual_normalize_body(string $raw, string $signature): string
 {
-    $raw = konvo_soul_fix_inline_newlines(konvo_soul_sanitize_utf8(str_replace(array("\r\n", "\r"), "\n", (string)$raw)));
-    $raw = trim($raw);
-    $raw = preg_replace('/\n{3,}/', "\n\n", $raw) ?? $raw;
-    if ($raw === '') return '';
+    $raw = konvo_soul_fix_inline_newlines((string)$raw);
+    if ($raw === '') {
+        return '';
+    }
     return casual_normalize_signature($raw, $signature);
 }
 
@@ -1227,8 +1227,8 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
             array('role' => 'system', 'content' => $system),
             array('role' => 'user', 'content' => $user),
         ),
-        'temperature' => $isZh ? 0.75 : 0.95,
-        'max_tokens' => !empty($rules['longform']) ? 2200 : 1200,
+        'temperature' => $isZh ? 0.55 : 0.95,
+        'max_tokens' => !empty($rules['longform']) ? 3200 : 1200,
     );
     if ($isZh) {
         $payload['response_format'] = array('type' => 'json_object');
@@ -1328,7 +1328,7 @@ function casual_post_topic(string $botUsername, string $title, string $raw, int 
     }
 
     $title = konvo_soul_sanitize_utf8(trim($title));
-    $raw = konvo_soul_sanitize_utf8(trim($raw));
+    $raw = konvo_soul_fix_inline_newlines(trim($raw));
     $categoryId = max(0, (int)$categoryId);
 
     if ($title === '' || konvo_soul_count_han_chars($title) < 4) {

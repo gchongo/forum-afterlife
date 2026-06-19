@@ -268,7 +268,10 @@ function konvo_soul_build_topic_system_prompt(string $soulPrompt, array $rules, 
         $parts[] = '【语言锁定】title 与 raw 必须全部使用简体中文书写，禁止英文正文或英文标题。'
             . 'plan_* 字段可简短英文，但 title/raw 不得出现英文句子。';
     }
-    $parts[] = '若 SOUL 要求陈述句结尾，则 title 不得是问句；raw 结尾段不得有问号或“大家怎么看/欢迎讨论”等互动式收束。正文中间可以使用“如何”“什么”等词做科普叙述，但全文不得出现问号（？或?）。';
+    $parts[] = 'raw 正文格式：3 到 6 段，段与段之间仅用一个空行（两个换行符）分隔；段内不得换行，每段写成连贯的一整块文字。';
+    $parts[] = '【事实纪律】严禁编造：具体百分比、精确人口比例、机构名称（如“XX协会”“XX报告”）、调查数据、年份统计。不确定时改用“许多”“相当多”“在不少城市”等定性表述，不要假装引用数据。';
+    $parts[] = '【文字完整】每个词必须写完整，禁止出现缺字、断词、单字引号（如只写“天”而不写“天光/光害”），禁止段内换行。';
+    $parts[] = '若 SOUL 要求陈述句结尾：title 不得是问句；结尾段不得有问号或“大家怎么看/欢迎讨论”等互动收束。正文中间可用“如何”“什么”做科普叙述。';
     $parts[] = '内容必须真实、非虚构；不得编造事实、数据、引语、来源、书目或网址，除非 SOUL 明确允许。';
     $parts[] = '严禁重复：不得与近期论坛话题或本 bot 近期帖子重复，也不得仅改写标题、换同义词或重排段落。必须提供明显不同的主题角度。';
     $parts[] = '不要签名；Discourse 已显示作者用户名。不要输出解释文字，只输出 JSON。';
@@ -363,6 +366,12 @@ function konvo_soul_retry_hint_for_error(string $errorBlob): string
     if ($e === '') {
         return '';
     }
+    if (str_contains($e, 'corrupt') || str_contains($e, 'fragment') || str_contains($e, 'isolated single')) {
+        return '【修正要求】上次文本有缺字或断词，每个词必须写完整，段内不要换行，不要出现单字引号。';
+    }
+    if (str_contains($e, 'fabricat') || str_contains($e, 'organization') || str_contains($e, 'statistics')) {
+        return '【修正要求】不要编造机构名称和精确百分比，改用定性描述（如“许多大城市”“相当比例的人口”）。';
+    }
     if (str_contains($e, 'chinese output') || str_contains($e, 'chinese chars')) {
         return '【修正要求】上次生成不合格：必须用简体中文写 title 和 raw，正文必须超过 520 个汉字（不是 500），3 到 6 段，禁止英文正文。';
     }
@@ -400,9 +409,34 @@ function konvo_soul_count_paragraphs(string $raw): int
 
 function konvo_soul_fix_inline_newlines(string $raw): string
 {
-    $raw = str_replace(array("\r\n", "\r"), "\n", $raw);
-    $raw = preg_replace('/(?<=[\x{4e00}-\x{9fff}])\n(?=[\x{4e00}-\x{9fff}])/u', '', $raw) ?? $raw;
-    return $raw;
+    $raw = konvo_soul_sanitize_utf8(str_replace(array("\r\n", "\r"), "\n", $raw));
+    $raw = trim($raw);
+    if ($raw === '') {
+        return '';
+    }
+    // 句号/问号/叹号后的单换行视为段落分隔
+    $raw = preg_replace('/([。！？!?])\s*\n\s*(?=[\x{4e00}-\x{9fff}「"（(])/u', "$1\n\n", $raw) ?? $raw;
+    $raw = preg_replace('/\n{3,}/', "\n\n", $raw) ?? $raw;
+
+    $parts = preg_split('/\n\s*\n/', $raw);
+    if (!is_array($parts) || $parts === array()) {
+        $flat = preg_replace('/\s*\n\s*/u', '', $raw) ?? $raw;
+        return trim(preg_replace('/[ \t]{2,}/u', ' ', $flat) ?? $flat);
+    }
+
+    $fixed = array();
+    foreach ($parts as $part) {
+        $part = trim((string)$part);
+        if ($part === '') {
+            continue;
+        }
+        // 段内所有单换行一律去掉（中文科普不需要软换行）
+        $part = preg_replace('/\s*\n\s*/u', '', $part) ?? $part;
+        $part = preg_replace('/[ \t]{2,}/u', ' ', $part) ?? $part;
+        $fixed[] = $part;
+    }
+
+    return implode("\n\n", $fixed);
 }
 
 function konvo_soul_normalize_paragraphs(string $raw, int $minPara, int $maxPara): string
@@ -531,6 +565,30 @@ function konvo_soul_prepare_topic(string $title, string $raw, array $rules): arr
     return array('title' => $title, 'raw' => trim($raw));
 }
 
+function konvo_soul_validate_content_quality(string $title, string $raw): ?string
+{
+    $blob = $title . "\n" . $raw;
+    if (str_contains($blob, '�') || preg_match('/\x{FFFD}/u', $blob)) {
+        return 'text contains UTF-8 replacement characters (corrupt encoding)';
+    }
+    if (preg_match('/[\x{4e00}-\x{9fff}]\n[\x{4e00}-\x{9fff}]/u', $raw)) {
+        return 'inline newline remains in body (corrupt formatting)';
+    }
+    if (preg_match('/[，。：；、""''(（][\x{4e00}-\x{9fff}][，。：；""'' )）]/u', $raw)) {
+        return 'isolated single Chinese character between punctuation (likely missing text)';
+    }
+    if (preg_match('/[""「『][\x{4e00}-\x{9fff}][""」』]/u', $raw)) {
+        return 'single Chinese character in quotation marks (incomplete term)';
+    }
+    if (preg_match('/国暗夜/u', $raw) || preg_match('/球过/u', $raw) || preg_match('/天越强/u', $raw)) {
+        return 'suspicious broken Chinese fragment detected (missing characters)';
+    }
+    if (preg_match('/根据.{0,18}(?:协会|基金会|研究院|调查组|报告)/u', $raw) && preg_match('/\d+\s*[%％]/u', $raw)) {
+        return 'do not cite organization names with precise percentages (likely fabricated statistics)';
+    }
+    return null;
+}
+
 function konvo_soul_expand_han_chars(string $raw, int $targetHan, string $suffix = ''): string
 {
     $raw = trim($raw);
@@ -621,6 +679,11 @@ function konvo_soul_validate_topic(string $title, string $raw, array $rules, boo
 
     if (konvo_soul_is_boilerplate_topic($title, $raw)) {
         return array('ok' => false, 'error' => 'content matches forbidden boilerplate template');
+    }
+
+    $qualityError = konvo_soul_validate_content_quality($title, $raw);
+    if ($qualityError !== null) {
+        return array('ok' => false, 'error' => $qualityError);
     }
 
     return array('ok' => true);
