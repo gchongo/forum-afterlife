@@ -1039,7 +1039,7 @@ function casual_openai_json(array $payload): array
     curl_setopt_array($ch, array(
         CURLOPT_POST => true,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT => 40,
+        CURLOPT_TIMEOUT => 18,
         CURLOPT_HTTPHEADER => array(
             'Content-Type: application/json',
             'Authorization: Bearer ' . KONVO_OPENAI_API_KEY,
@@ -1259,6 +1259,7 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
     );
     $recentHints = casual_recent_hint_lines($recent);
     $recentOpeningHints = casual_recent_opening_stems($recent, 14);
+    $laneKey = strtolower(trim((string)($lane['key'] ?? 'general')));
     $historyMode = casual_is_history_mode($bot, $categoryId);
     $seedPool = $historyMode ? casual_history_seed_topic_pool() : casual_seed_topic_pool();
     $seedTopic = casual_pick_random_seed_topic($recent, $recentForumTitles, $seedPool);
@@ -1474,9 +1475,10 @@ $generated = null;
 $bestFallback = null;
 $bestFallbackScore = -1.0;
 $extraAvoidance = '';
+$historyModeRun = casual_is_history_mode($bot, $categoryId);
 $requestStartTs = isset($_SERVER['REQUEST_TIME_FLOAT']) ? (float)$_SERVER['REQUEST_TIME_FLOAT'] : microtime(true);
-for ($i = 0; $i < 4; $i++) {
-    if ((microtime(true) - $requestStartTs) > 32.0) {
+for ($i = 0; $i < 2; $i++) {
+    if ((microtime(true) - $requestStartTs) > 20.0) {
         break;
     }
     $strict = $i > 0;
@@ -1487,7 +1489,7 @@ for ($i = 0; $i < 4; $i++) {
             $res = array('ok' => false, 'error' => 'title too similar to recent forum topics', 'title' => (string)($res['title'] ?? ''));
         }
     }
-    if (!empty($res['ok'])) {
+    if (!empty($res['ok']) && !$historyModeRun) {
         $gate = casual_uniqueness_gate_with_llm((string)$res['title'], (string)$res['raw'], $recent, $recentForumTitles);
         $res['uniqueness_gate'] = $gate;
         if (!empty($gate['ok']) && empty($gate['passes'])) {

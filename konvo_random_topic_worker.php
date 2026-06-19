@@ -75,6 +75,7 @@ if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((strin
 if (!defined('KONVO_LLM_CHAT_COMPLETIONS_URL')) define('KONVO_LLM_CHAT_COMPLETIONS_URL', rtrim((string)(getenv('LLM_API_BASE_URL') ?: getenv('OPENAI_API_BASE') ?: 'https://api.deepseek.com'), '/') . '/chat/completions');
 if (!defined('KONVO_SECRET')) define('KONVO_SECRET', trim((string)getenv('DISCOURSE_WEBHOOK_SECRET')));
 if (!defined('KONVO_RANDOM_TOPIC_FAST_MODE')) define('KONVO_RANDOM_TOPIC_FAST_MODE', getenv('KONVO_RANDOM_TOPIC_FAST_MODE') === false ? '1' : (string)getenv('KONVO_RANDOM_TOPIC_FAST_MODE'));
+if (!defined('KONVO_RANDOM_TOPIC_DELEGATE_TO_CASUAL')) define('KONVO_RANDOM_TOPIC_DELEGATE_TO_CASUAL', getenv('KONVO_RANDOM_TOPIC_DELEGATE_TO_CASUAL') === false ? '1' : (string)getenv('KONVO_RANDOM_TOPIC_DELEGATE_TO_CASUAL'));
 if (!defined('KONVO_FEED_FETCH_TIMEOUT')) define('KONVO_FEED_FETCH_TIMEOUT', 8);
 if (!defined('KONVO_RANDOM_TOPIC_MAX_SOURCES')) define('KONVO_RANDOM_TOPIC_MAX_SOURCES', 8);
 if (!defined('KONVO_CHAT_CATEGORY_ID')) define('KONVO_CHAT_CATEGORY_ID', 4);
@@ -92,6 +93,57 @@ function konvo_random_topic_fast_mode()
     $v = strtolower(trim((string)KONVO_RANDOM_TOPIC_FAST_MODE));
     if ($v === '' || $v === '1' || $v === 'true' || $v === 'yes' || $v === 'on') return true;
     return false;
+}
+
+function konvo_random_topic_delegate_to_casual_enabled(): bool
+{
+    $v = strtolower(trim((string)KONVO_RANDOM_TOPIC_DELEGATE_TO_CASUAL));
+    return ($v === '' || $v === '1' || $v === 'true' || $v === 'yes' || $v === 'on');
+}
+
+function konvo_random_topic_delegate_to_casual(array $passthrough): array
+{
+    if (!function_exists('curl_init')) {
+        return array('ok' => false, 'error' => 'curl_init unavailable');
+    }
+    $base = rtrim((string)KONVO_BASE_URL, '/');
+    $url = $base . '/konvo_casual_topic_worker.php';
+    $query = http_build_query($passthrough);
+    if ($query !== '') {
+        $url .= '?' . $query;
+    }
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, array(
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 25,
+    ));
+    $raw = curl_exec($ch);
+    $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+
+    if ($raw === false || $err !== '' || $status < 200 || $status >= 300) {
+        return array(
+            'ok' => false,
+            'error' => 'delegate request failed',
+            'status' => $status,
+            'curl_error' => $err,
+            'raw' => is_string($raw) ? $raw : '',
+        );
+    }
+    $decoded = json_decode((string)$raw, true);
+    if (!is_array($decoded)) {
+        return array(
+            'ok' => false,
+            'error' => 'delegate returned non-json',
+            'status' => $status,
+            'raw' => (string)$raw,
+        );
+    }
+    $decoded['delegated_from'] = 'konvo_random_topic_worker.php';
+    $decoded['delegate_target'] = 'konvo_casual_topic_worker.php';
+    return $decoded;
 }
 
 $bots = konvo_bot_registry_enabled();
@@ -2343,6 +2395,29 @@ $previewMode = (isset($_GET['preview']) && (string)$_GET['preview'] === '1')
     || (isset($_GET['preview_only']) && (string)$_GET['preview_only'] === '1');
 $confirmPost = (isset($_POST['confirm_post']) && (string)$_POST['confirm_post'] === '1')
     || (isset($_GET['confirm_post']) && (string)$_GET['confirm_post'] === '1');
+
+if (konvo_random_topic_delegate_to_casual_enabled()) {
+    $allowed = array(
+        'key', 'dry_run', 'force', 'category', 'category_id', 'lane',
+        'preview', 'preview_only', 'confirm_post', 'preview_token',
+        'bot_username', 'edited_title', 'edited_raw'
+    );
+    $passthrough = array();
+    foreach ($allowed as $k) {
+        if (isset($_GET[$k])) {
+            $passthrough[$k] = (string)$_GET[$k];
+        }
+    }
+    $delegate = konvo_random_topic_delegate_to_casual($passthrough);
+    if (empty($delegate['ok'])) {
+        out_json(502, array(
+            'ok' => false,
+            'error' => 'Random topic delegation to casual worker failed.',
+            'delegate' => $delegate,
+        ));
+    }
+    out_json(200, $delegate);
+}
 
 if ($confirmPost) {
     $token = isset($_POST['preview_token']) ? (string)$_POST['preview_token'] : (isset($_GET['preview_token']) ? (string)$_GET['preview_token'] : '');
