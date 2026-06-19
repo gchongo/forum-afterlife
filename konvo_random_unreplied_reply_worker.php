@@ -34,6 +34,7 @@ if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day'
 if (!defined('KONVO_DISCOURSE_API_KEY')) define('KONVO_DISCOURSE_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((string)(getenv('LLM_API_KEY') ?: getenv('DEEPSEEK_API_KEY') ?: getenv('OPENAI_API_KEY'))));
 if (!defined('KONVO_LLM_CHAT_COMPLETIONS_URL')) define('KONVO_LLM_CHAT_COMPLETIONS_URL', rtrim((string)(getenv('LLM_API_BASE_URL') ?: getenv('OPENAI_API_BASE') ?: 'https://api.deepseek.com'), '/') . '/chat/completions');
+if (!defined('KONVO_DISCOURSE_API_USERNAME')) define('KONVO_DISCOURSE_API_USERNAME', trim((string)(getenv('DISCOURSE_API_USERNAME') ?: 'system')));
 if (!defined('KONVO_SECRET')) define('KONVO_SECRET', trim((string)getenv('DISCOURSE_WEBHOOK_SECRET')));
 
 function worker_model_for_task($task, $ctx = array())
@@ -5266,10 +5267,18 @@ if (KONVO_OPENAI_API_KEY === '') {
 
 $latest = fetch_json(rtrim(KONVO_BASE_URL, '/') . '/latest.json', array(
     'Api-Key: ' . KONVO_DISCOURSE_API_KEY,
-    'Api-Username: BayMax',
+    'Api-Username: ' . KONVO_DISCOURSE_API_USERNAME,
 ));
 if (!is_array($latest) || !isset($latest['topic_list']['topics']) || !is_array($latest['topic_list']['topics'])) {
-    out_json(500, array('ok' => false, 'error' => 'Could not fetch latest topics.'));
+    // Fallback for forums where public latest is readable but API header call is blocked by edge/WAF.
+    $latest = fetch_json(rtrim(KONVO_BASE_URL, '/') . '/latest.json');
+}
+if (!is_array($latest) || !isset($latest['topic_list']['topics']) || !is_array($latest['topic_list']['topics'])) {
+    out_json(500, array(
+        'ok' => false,
+        'error' => 'Could not fetch latest topics.',
+        'hint' => 'Check DISCOURSE_BASE_URL, DISCOURSE_API_KEY, DISCOURSE_API_USERNAME, and Cloudflare/WAF allowlist.',
+    ));
 }
 
 $seen = load_seen_topics();
@@ -5297,8 +5306,11 @@ $topicDetail = (is_array($orphanPriority) && isset($orphanPriority['detail']) &&
     ? $orphanPriority['detail']
     : fetch_json(rtrim(KONVO_BASE_URL, '/') . '/t/' . $topicId . '.json', array(
         'Api-Key: ' . KONVO_DISCOURSE_API_KEY,
-        'Api-Username: BayMax',
+        'Api-Username: ' . KONVO_DISCOURSE_API_USERNAME,
     ));
+if (!is_array($topicDetail) || !isset($topicDetail['post_stream']['posts']) || !is_array($topicDetail['post_stream']['posts']) || count($topicDetail['post_stream']['posts']) === 0) {
+    $topicDetail = fetch_json(rtrim(KONVO_BASE_URL, '/') . '/t/' . $topicId . '.json');
+}
 if (!is_array($topicDetail) || !isset($topicDetail['post_stream']['posts']) || !is_array($topicDetail['post_stream']['posts']) || count($topicDetail['post_stream']['posts']) === 0) {
     out_json(500, array('ok' => false, 'error' => 'Could not fetch topic detail.', 'topic_id' => $topicId));
 }
