@@ -36,24 +36,16 @@ if (!defined('KONVO_LLM_CHAT_COMPLETIONS_URL')) define('KONVO_LLM_CHAT_COMPLETIO
 if (!defined('KONVO_SECRET')) define('KONVO_SECRET', trim((string)getenv('DISCOURSE_WEBHOOK_SECRET')));
 if (!defined('KONVO_ALLOW_CASUAL_TOPIC_POSTS')) define('KONVO_ALLOW_CASUAL_TOPIC_POSTS', trim((string)getenv('KONVO_ALLOW_CASUAL_TOPIC_POSTS')));
 if (!defined('KONVO_CASUAL_DAY_TZ')) define('KONVO_CASUAL_DAY_TZ', trim((string)getenv('KONVO_CASUAL_DAY_TZ')) !== '' ? trim((string)getenv('KONVO_CASUAL_DAY_TZ')) : 'America/Los_Angeles');
-if (!defined('KONVO_TALK_CATEGORY_ID')) define('KONVO_TALK_CATEGORY_ID', 34);
-if (!defined('KONVO_WEBDEV_CATEGORY_ID')) define('KONVO_WEBDEV_CATEGORY_ID', 42);
-if (!defined('KONVO_GAMING_CATEGORY_ID')) define('KONVO_GAMING_CATEGORY_ID', 115);
-if (!defined('KONVO_DESIGN_CATEGORY_ID')) define('KONVO_DESIGN_CATEGORY_ID', 114);
+if (!defined('KONVO_CHAT_CATEGORY_ID')) define('KONVO_CHAT_CATEGORY_ID', 4);
+if (!defined('KONVO_HISTORY_CATEGORY_ID')) define('KONVO_HISTORY_CATEGORY_ID', 10);
+if (!defined('KONVO_TALK_CATEGORY_ID')) define('KONVO_TALK_CATEGORY_ID', (int)KONVO_CHAT_CATEGORY_ID);
+if (!defined('KONVO_WEBDEV_CATEGORY_ID')) define('KONVO_WEBDEV_CATEGORY_ID', (int)KONVO_HISTORY_CATEGORY_ID);
+if (!defined('KONVO_GAMING_CATEGORY_ID')) define('KONVO_GAMING_CATEGORY_ID', (int)KONVO_HISTORY_CATEGORY_ID);
+if (!defined('KONVO_DESIGN_CATEGORY_ID')) define('KONVO_DESIGN_CATEGORY_ID', (int)KONVO_HISTORY_CATEGORY_ID);
 
 $bots = array(
-    array('username' => 'BayMax', 'name' => 'BayMax', 'soul_key' => 'baymax', 'soul_fallback' => 'You are BayMax. Write naturally, concise, and human.'),
-    array('username' => 'vaultboy', 'name' => 'VaultBoy', 'soul_key' => 'vaultboy', 'soul_fallback' => 'You are VaultBoy. Casual, playful, and game-obsessed.'),
-    array('username' => 'MechaPrime', 'name' => 'MechaPrime', 'soul_key' => 'mechaprime', 'soul_fallback' => 'You are MechaPrime. Write naturally, concise, and human.'),
-    array('username' => 'yoshiii', 'name' => 'Yoshiii', 'soul_key' => 'yoshiii', 'soul_fallback' => 'You are Yoshiii. Write naturally, concise, and human.'),
-    array('username' => 'bobamilk', 'name' => 'BobaMilk', 'soul_key' => 'bobamilk', 'soul_fallback' => 'You are BobaMilk. Write naturally, concise, and human.'),
-    array('username' => 'wafflefries', 'name' => 'WaffleFries', 'soul_key' => 'wafflefries', 'soul_fallback' => 'You are WaffleFries. Write naturally, concise, and human.'),
-    array('username' => 'quelly', 'name' => 'Quelly', 'soul_key' => 'quelly', 'soul_fallback' => 'You are Quelly. Write naturally, concise, and human.'),
-    array('username' => 'sora', 'name' => 'Sora', 'soul_key' => 'sora', 'soul_fallback' => 'You are Sora. Write naturally, concise, and human.'),
-    array('username' => 'sarah_connor', 'name' => 'Sarah', 'soul_key' => 'sarah_connor', 'soul_fallback' => 'You are Sarah Connor. Write naturally, concise, and human.'),
-    array('username' => 'ellen1979', 'name' => 'Ellen', 'soul_key' => 'ellen1979', 'soul_fallback' => 'You are Ellen1979. Write naturally, concise, and human.'),
-    array('username' => 'arthurdent', 'name' => 'Arthur', 'soul_key' => 'arthurdent', 'soul_fallback' => 'You are ArthurDent. Write naturally, concise, and human.'),
-    array('username' => 'hariseldon', 'name' => 'Hari', 'soul_key' => 'hariseldon', 'soul_fallback' => 'You are HariSeldon. Write naturally, concise, and human.'),
+    array('username' => 'higuyer', 'name' => 'higuyer', 'soul_key' => 'higuyer', 'soul_fallback' => 'You are higuyer. Reflective, history-aware, and conversational.'),
+    array('username' => 'BAI', 'name' => 'BAI', 'soul_key' => 'bai', 'soul_fallback' => 'You are BAI. Friendly, social, and concise.'),
 );
 
 function casual_out(int $status, array $data): void
@@ -479,7 +471,7 @@ function casual_fetch_latest_topic_titles(int $max = 120): array
             CURLOPT_TIMEOUT => 15,
             CURLOPT_HTTPHEADER => array(
                 'Api-Key: ' . KONVO_API_KEY,
-                'Api-Username: kirupa',
+                'Api-Username: system',
             ),
         ));
         $body = curl_exec($ch);
@@ -692,21 +684,9 @@ function casual_uniqueness_gate_with_llm(string $candidateTitle, string $candida
 function casual_pick_bot(array $bots): array
 {
     if ($bots === array()) {
-        return array('username' => 'BayMax', 'name' => 'BayMax', 'soul_key' => 'baymax', 'soul_fallback' => 'Write naturally, concise, and human.');
+        return array('username' => 'BAI', 'name' => 'BAI', 'soul_key' => 'bai', 'soul_fallback' => 'Write naturally, concise, and human.');
     }
-    $preferred = array(
-        'BayMax', 'MechaPrime', 'yoshiii', 'bobamilk', 'wafflefries',
-        'quelly', 'sora', 'sarah_connor', 'ellen1979', 'arthurdent', 'hariseldon'
-    );
-    $pool = array_values(array_filter($bots, static function (array $bot) use ($preferred): bool {
-        $username = (string)($bot['username'] ?? '');
-        return in_array($username, $preferred, true);
-    }));
-    if ($pool === array()) {
-        $pool = $bots;
-    }
-    shuffle($pool);
-    return $pool[0];
+    return $bots[0];
 }
 
 function casual_find_bot(array $bots, string $username): ?array
@@ -717,6 +697,33 @@ function casual_find_bot(array $bots, string $username): ?array
         if ($bu !== '' && $bu === $u) return $bot;
     }
     return null;
+}
+
+function casual_pick_category_id_for_lane(array $lane): int
+{
+    $forced = strtolower(trim((string)($_GET['category'] ?? '')));
+    if ($forced === 'history' || $forced === 'historical' || $forced === 'history_long_river') {
+        return (int)KONVO_HISTORY_CATEGORY_ID;
+    }
+    if ($forced === 'chat' || $forced === 'talk') {
+        return (int)KONVO_CHAT_CATEGORY_ID;
+    }
+
+    $laneKey = strtolower(trim((string)($lane['key'] ?? '')));
+    if (in_array($laneKey, array('sci_fi_ai', 'games'), true)) {
+        return (int)KONVO_HISTORY_CATEGORY_ID;
+    }
+    return (int)KONVO_CHAT_CATEGORY_ID;
+}
+
+function casual_bot_for_category(int $categoryId, array $bots): array
+{
+    $targetUsername = $categoryId === (int)KONVO_HISTORY_CATEGORY_ID ? 'higuyer' : 'bai';
+    $picked = casual_find_bot($bots, $targetUsername);
+    if (is_array($picked)) {
+        return $picked;
+    }
+    return casual_pick_bot($bots);
 }
 
 function casual_is_gaming_topic(string $text): bool
@@ -1055,7 +1062,7 @@ function casual_pick_category_with_llm(string $title, string $raw, array $bot = 
         return $fallback;
     }
 
-    $botName = trim((string)($bot['name'] ?? 'BayMax'));
+    $botName = trim((string)($bot['name'] ?? 'BAI'));
     $planMood = trim((string)($plan['mood'] ?? ''));
     $planAngle = trim((string)($plan['angle'] ?? ''));
     $planIntent = trim((string)($plan['posting_intent'] ?? ''));
@@ -1203,7 +1210,7 @@ function casual_pick_random_seed_topic(array $recentLocal, array $recentForumTit
 
 function casual_generate_with_llm(array $bot, string $signature, array $recent, array $recentForumTitles, bool $strict, string $extraAvoidance = '', array $lane = array()): array
 {
-    $botName = trim((string)($bot['name'] ?? 'BayMax'));
+    $botName = trim((string)($bot['name'] ?? 'BAI'));
     $soulKey = trim((string)($bot['soul_key'] ?? strtolower($botName)));
     $soulFallback = trim((string)($bot['soul_fallback'] ?? 'Write naturally, concise, and human.'));
     $soulPrompt = konvo_compose_forum_persona_system_prompt(
@@ -1297,6 +1304,11 @@ function casual_post_topic(string $botUsername, string $title, string $raw, int 
         return array('ok' => false, 'status' => 0, 'error' => 'curl_init unavailable', 'body' => array(), 'raw' => '');
     }
 
+    $postAs = trim($botUsername);
+    if ($postAs === '') {
+        return array('ok' => false, 'status' => 0, 'error' => 'No Api-Username configured for posting.', 'body' => array(), 'raw' => '');
+    }
+
     $payload = array(
         'title' => $title,
         'raw' => $raw,
@@ -1311,7 +1323,7 @@ function casual_post_topic(string $botUsername, string $title, string $raw, int 
         CURLOPT_HTTPHEADER => array(
             'Content-Type: application/json',
             'Api-Key: ' . KONVO_API_KEY,
-            'Api-Username: ' . $botUsername,
+            'Api-Username: ' . $postAs,
         ),
         CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_SLASHES),
     ));
@@ -1326,6 +1338,7 @@ function casual_post_topic(string $botUsername, string $title, string $raw, int 
         'ok' => ($err === '' && $status >= 200 && $status < 300 && is_array($decoded)),
         'status' => $status,
         'error' => $err,
+        'post_as' => $postAs,
         'body' => is_array($decoded) ? $decoded : array(),
         'raw' => (string)$body,
     );
@@ -1364,11 +1377,6 @@ if (!$dryRun && !$allowPosting && !$force) {
     ));
 }
 
-$bot = casual_pick_bot($bots);
-$signatureSeed = strtolower((string)($bot['username'] ?? 'baymax') . '|casual-topic|' . date('Y-m-d-H'));
-$signature = function_exists('konvo_signature_with_optional_emoji')
-    ? konvo_signature_with_optional_emoji((string)($bot['name'] ?? 'BayMax'), $signatureSeed)
-    : (string)($bot['name'] ?? 'BayMax');
 $recent = casual_load_recent_topics();
 $lane = casual_pick_interest_lane($recent);
 $laneOverride = trim((string)($_GET['lane'] ?? ''));
@@ -1378,6 +1386,12 @@ if ($laneOverride !== '') {
         $lane = $over;
     }
 }
+$categoryId = casual_pick_category_id_for_lane($lane);
+$bot = casual_bot_for_category($categoryId, $bots);
+$signatureSeed = strtolower((string)($bot['username'] ?? 'bai') . '|casual-topic|' . date('Y-m-d-H'));
+$signature = function_exists('konvo_signature_with_optional_emoji')
+    ? konvo_signature_with_optional_emoji((string)($bot['name'] ?? 'BAI'), $signatureSeed)
+    : (string)($bot['name'] ?? 'BAI');
 $today = casual_today_key();
 if (!$dryRun && !$force) {
     $todayCount = casual_daily_count_for($today);
@@ -1471,12 +1485,11 @@ $raw = (string)$generated['raw'];
 $plan = isset($generated['plan']) && is_array($generated['plan']) ? $generated['plan'] : array();
 $categoryDecision = array(
     'ok' => true,
-    'category_key' => 'talk',
-    'category_id' => (int)KONVO_TALK_CATEGORY_ID,
-    'reason' => 'forced_ai_tech_discussion_mode',
+    'category_key' => $categoryId === (int)KONVO_HISTORY_CATEGORY_ID ? 'history' : 'chat',
+    'category_id' => $categoryId,
+    'reason' => 'lane_based_category_bot_policy',
     'confidence' => 1.0,
 );
-$categoryId = (int)KONVO_TALK_CATEGORY_ID;
 $gamingDetected = false;
 $quirkyMode = false;
 $quirkyMediaUrl = '';
@@ -1487,6 +1500,7 @@ if ($dryRun) {
         'dry_run' => true,
         'action' => 'would_post_casual_topic',
         'bot' => $bot,
+        'post_as' => (string)($bot['username'] ?? ''),
         'plan' => $plan,
         'lane' => $lane,
         'topic' => array(
@@ -1504,7 +1518,7 @@ if ($dryRun) {
     ));
 }
 
-$post = casual_post_topic((string)($bot['username'] ?? 'BayMax'), $title, $raw, $categoryId);
+$post = casual_post_topic((string)($bot['username'] ?? 'BAI'), $title, $raw, $categoryId);
 if (!$post['ok']) {
     casual_out(500, array(
         'ok' => false,
@@ -1529,6 +1543,7 @@ casual_out(200, array(
     'action' => 'posted_casual_topic',
     'topic_url' => $topicUrl,
     'bot' => $bot,
+    'post_as' => (string)($post['post_as'] ?? ''),
     'plan' => $plan,
     'lane' => $lane,
     'topic' => array(

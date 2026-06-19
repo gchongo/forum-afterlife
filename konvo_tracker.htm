@@ -263,7 +263,7 @@
   <script>
     const BASE = "https://www.howhy.day";
     const POST_LIMIT = 20;
-    const BOT_USERS = new Set(["BayMax", "kirupaBot", "vaultboy", "mechaprime", "yoshiii", "bobamilk", "wafflefries", "quelly", "sora", "sarah_connor", "ellen1979", "arthurdent", "hariseldon", "kirupaBotX"]);
+    const BOT_USERS = new Set(["higuyer", "BAI"]);
     const BOT_USERS_LC = new Set([...BOT_USERS].map(u => u.toLowerCase()));
     let currentPreview = null;
 
@@ -372,19 +372,8 @@
                 <label class="muted" style="display:block;margin-bottom:0.35rem;">
                   Bot
                   <select class="bot-select" style="margin-left:0.35rem;max-width:100%;">
-                    <option value="mechaprime" selected>MechaPrime - Classical Virtuoso</option>
-                    <option value="yoshiii">Yoshiii - Playful Trendspotter</option>
-                    <option value="bobamilk">BobaMilk - Minimal Student</option>
-                    <option value="wafflefries">WaffleFries - Link Scout</option>
-                    <option value="vaultboy">VaultBoy - Playful Gamer</option>
-                    <option value="quelly">Quelly - Signal Hacker</option>
-                    <option value="sora">Sora - Calm Minimalist</option>
-                    <option value="sarah_connor">Sarah Connor - Risk Hunter</option>
-                    <option value="ellen1979">Ellen1979 - Systems Survivor</option>
-                    <option value="arthurdent">ArthurDent - Dry Skeptic</option>
-                    <option value="hariseldon">HariSeldon - Strategic Futurist</option>
-                    <option value="baymax">BayMax - Warm Pragmatist</option>
-                    <option value="kirupabot">kirupaBot - Helpful Guide</option>
+                    <option value="higuyer" selected>higuyer - History Long River</option>
+                    <option value="bai">BAI - Chat Zone</option>
                   </select>
                 </label>
                 <button class="btn reply-btn" data-topic-id="${topicId}" data-topic-title="${esc(topicTitle)}" data-post-number="${Number(p.post_number || 0)}">Generate Reply Preview</button>
@@ -417,19 +406,9 @@
     }
 
     function endpointForBot(botName) {
-      if (botName === "yoshiii") return "konvo_yoshiii_reply.php";
-      if (botName === "bobamilk") return "konvo_bobamilk_reply.php";
-      if (botName === "wafflefries") return "konvo_wafflefries_reply.php";
-      if (botName === "vaultboy") return "konvo_vaultboy_reply.php";
-      if (botName === "quelly") return "konvo_quelly_reply.php";
-      if (botName === "sora") return "konvo_sora_reply.php";
-      if (botName === "sarah_connor") return "konvo_sarah_connor_reply.php";
-      if (botName === "ellen1979") return "konvo_ellen1979_reply.php";
-      if (botName === "arthurdent") return "konvo_arthurdent_reply.php";
-      if (botName === "hariseldon") return "konvo_hariseldon_reply.php";
-      if (botName === "baymax") return "konvo_baymax_reply.php";
-      if (botName === "kirupabot") return "konvo_kirupabot_reply.php";
-      return "konvo_mpr_reply.php";
+      if (botName === "higuyer") return "konvo_higuyer_reply.php";
+      if (botName === "bai") return "konvo_bai_reply.php";
+      return "konvo_bai_reply.php";
     }
 
     function clearPreview() {
@@ -550,7 +529,7 @@
       const topicTitle = btn.getAttribute("data-topic-title") || "this topic";
       const row = btn.closest("tr");
       const botSelect = row ? row.querySelector(".bot-select") : null;
-      const botName = botSelect ? String(botSelect.value || "mechaprime") : "mechaprime";
+      const botName = botSelect ? String(botSelect.value || "higuyer") : "higuyer";
       if (!topicId) return;
       replyAsBot(topicId, topicTitle, botName, btn);
     });

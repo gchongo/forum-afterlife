@@ -428,9 +428,9 @@ if ($postId <= 0 || $topicId <= 0) {
     jsonOut(['ok' => false, 'error' => 'Missing post/topic id.'], 400);
 }
 
-$trackedBots = ['baymax', 'kirupabot', 'vaultboy', 'mechaprime', 'yoshiii', 'bobamilk', 'wafflefries', 'quelly', 'sora', 'sarah_connor', 'ellen1979', 'arthurdent', 'hariseldon', 'kirupabotx', 'coding_agent_bot'];
+$trackedBots = ['higuyer', 'bai'];
 $isTrackedBotAuthor = in_array($author, $trackedBots, true);
-if ($isTrackedBotAuthor && $author === 'kirupabot') {
+if ($isTrackedBotAuthor) {
     jsonOut(['ok' => true, 'ignored' => true, 'reason' => 'Author is a bot.']);
 }
 
@@ -443,22 +443,11 @@ if (alreadyProcessedKey($dedupeKey)) {
 
 $mentions = extractMentions($payload, $raw);
 $botEndpointMap = [
-    'baymax' => 'konvo_baymax_reply.php',
-    'kirupabot' => 'konvo_kirupabot_reply.php',
-    'vaultboy' => 'konvo_vaultboy_reply.php',
-    'mechaprime' => 'konvo_mpr_reply.php',
-    'yoshiii' => 'konvo_yoshiii_reply.php',
-    'bobamilk' => 'konvo_bobamilk_reply.php',
-    'wafflefries' => 'konvo_wafflefries_reply.php',
-    'quelly' => 'konvo_quelly_reply.php',
-    'sora' => 'konvo_sora_reply.php',
-    'sarah_connor' => 'konvo_sarah_connor_reply.php',
-    'ellen1979' => 'konvo_ellen1979_reply.php',
-    'arthurdent' => 'konvo_arthurdent_reply.php',
-    'hariseldon' => 'konvo_hariseldon_reply.php',
+    'higuyer' => 'konvo_higuyer_reply.php',
+    'bai' => 'konvo_bai_reply.php',
 ];
 
-if ($isTrackedBotAuthor && $author !== 'kirupabot') {
+if (false && $isTrackedBotAuthor && $author !== 'kirupabot') {
     $categoryId = (int)($post['category_id'] ?? ($payload['category_id'] ?? 0));
     $topicTitle = trim((string)($post['topic_title'] ?? ($payload['topic_title'] ?? '')));
     $topicText = $topicTitle . "\n" . $raw;

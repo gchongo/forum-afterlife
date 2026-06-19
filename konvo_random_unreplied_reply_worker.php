@@ -43,18 +43,8 @@ function worker_model_for_task($task, $ctx = array())
 }
 
 $bots = array(
-    array('username' => 'BayMax', 'signature' => 'BayMax', 'soul_key' => 'baymax'),
-    array('username' => 'vaultboy', 'signature' => 'VaultBoy', 'soul_key' => 'vaultboy'),
-    array('username' => 'MechaPrime', 'signature' => 'MechaPrime', 'soul_key' => 'mechaprime'),
-    array('username' => 'yoshiii', 'signature' => 'Yoshiii', 'soul_key' => 'yoshiii'),
-    array('username' => 'bobamilk', 'signature' => 'BobaMilk', 'soul_key' => 'bobamilk'),
-    array('username' => 'wafflefries', 'signature' => 'WaffleFries', 'soul_key' => 'wafflefries'),
-    array('username' => 'quelly', 'signature' => 'Quelly', 'soul_key' => 'quelly'),
-    array('username' => 'sora', 'signature' => 'Sora', 'soul_key' => 'sora'),
-    array('username' => 'sarah_connor', 'signature' => 'Sarah', 'soul_key' => 'sarah_connor'),
-    array('username' => 'ellen1979', 'signature' => 'Ellen', 'soul_key' => 'ellen1979'),
-    array('username' => 'arthurdent', 'signature' => 'Arthur', 'soul_key' => 'arthurdent'),
-    array('username' => 'hariseldon', 'signature' => 'Hari', 'soul_key' => 'hariseldon'),
+    array('username' => 'higuyer', 'signature' => 'higuyer', 'soul_key' => 'higuyer'),
+    array('username' => 'BAI', 'signature' => 'BAI', 'soul_key' => 'bai'),
 );
 
 function out_json($code, $data)
@@ -373,10 +363,7 @@ function worker_consensus_mark_posted_reply(&$consensusState, $topicId, $botUser
 function worker_all_bot_signature_aliases()
 {
     return array(
-        'baymax', 'kirupabot', 'kirupaBot', 'vaultboy', 'VaultBoy', 'mechaprime', 'MechaPrime',
-        'yoshiii', 'Yoshiii', 'bobamilk', 'BobaMilk', 'wafflefries', 'WaffleFries',
-        'quelly', 'Quelly', 'sora', 'Sora', 'sarah_connor', 'Sarah', 'ellen1979', 'Ellen',
-        'arthurdent', 'Arthur', 'hariseldon', 'Hari',
+        'higuyer', 'Higuyer', 'bai', 'BAI',
     );
 }
 
@@ -866,7 +853,7 @@ function worker_is_known_bot_username($username)
 {
     static $botSet = null;
     if ($botSet === null) {
-        $bots = array('baymax', 'kirupabot', 'vaultboy', 'mechaprime', 'yoshiii', 'bobamilk', 'wafflefries', 'quelly', 'sora', 'sarah_connor', 'ellen1979', 'arthurdent', 'hariseldon');
+        $bots = array('higuyer', 'bai');
         $botSet = array_fill_keys($bots, true);
     }
     $u = strtolower(trim((string)$username));
@@ -2482,7 +2469,7 @@ function post_content_text($post)
 function is_bot_user($username)
 {
     $u = strtolower(trim((string)$username));
-    $botUsers = array('baymax', 'kirupabot', 'vaultboy', 'mechaprime', 'yoshiii', 'bobamilk', 'wafflefries', 'quelly', 'sora', 'sarah_connor', 'ellen1979', 'arthurdent', 'hariseldon', 'kirupabotx', 'coding_agent_bot');
+    $botUsers = array('higuyer', 'bai');
     return in_array($u, $botUsers, true);
 }
 
@@ -2892,10 +2879,7 @@ function worker_strip_foreign_bot_name_noise($text, $currentBotUsername)
     $txt = trim((string)$text);
     if ($txt === '') return $txt;
 
-    $aliases = array(
-        'baymax', 'kirupabot', 'vaultboy', 'mechaprime', 'yoshiii', 'bobamilk', 'wafflefries', 'quelly', 'sora',
-        'sarah', 'ellen', 'arthur', 'hari', 'sarah_connor', 'ellen1979', 'arthurdent', 'hariseldon',
-    );
+    $aliases = array('higuyer', 'bai');
     $current = strtolower(trim((string)$currentBotUsername));
     $aliases = array_values(array_filter($aliases, static function ($a) use ($current) {
         $name = strtolower(trim((string)$a));

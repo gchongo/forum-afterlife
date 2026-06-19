@@ -76,11 +76,13 @@ if (!defined('KONVO_SECRET')) define('KONVO_SECRET', trim((string)getenv('DISCOU
 if (!defined('KONVO_RANDOM_TOPIC_FAST_MODE')) define('KONVO_RANDOM_TOPIC_FAST_MODE', getenv('KONVO_RANDOM_TOPIC_FAST_MODE') === false ? '1' : (string)getenv('KONVO_RANDOM_TOPIC_FAST_MODE'));
 if (!defined('KONVO_FEED_FETCH_TIMEOUT')) define('KONVO_FEED_FETCH_TIMEOUT', 8);
 if (!defined('KONVO_RANDOM_TOPIC_MAX_SOURCES')) define('KONVO_RANDOM_TOPIC_MAX_SOURCES', 8);
-if (!defined('KONVO_CATEGORY_ID')) define('KONVO_CATEGORY_ID', 34);
-if (!defined('KONVO_WEBDEV_CATEGORY_ID')) define('KONVO_WEBDEV_CATEGORY_ID', 42);
-if (!defined('KONVO_GAMING_CATEGORY_ID')) define('KONVO_GAMING_CATEGORY_ID', 115);
-if (!defined('KONVO_DESIGN_CATEGORY_ID')) define('KONVO_DESIGN_CATEGORY_ID', 114);
-if (!defined('KONVO_TECH_NEWS_CATEGORY_ID')) define('KONVO_TECH_NEWS_CATEGORY_ID', 116);
+if (!defined('KONVO_CHAT_CATEGORY_ID')) define('KONVO_CHAT_CATEGORY_ID', 4);
+if (!defined('KONVO_HISTORY_CATEGORY_ID')) define('KONVO_HISTORY_CATEGORY_ID', 10);
+if (!defined('KONVO_CATEGORY_ID')) define('KONVO_CATEGORY_ID', (int)KONVO_CHAT_CATEGORY_ID);
+if (!defined('KONVO_WEBDEV_CATEGORY_ID')) define('KONVO_WEBDEV_CATEGORY_ID', (int)KONVO_HISTORY_CATEGORY_ID);
+if (!defined('KONVO_GAMING_CATEGORY_ID')) define('KONVO_GAMING_CATEGORY_ID', (int)KONVO_HISTORY_CATEGORY_ID);
+if (!defined('KONVO_DESIGN_CATEGORY_ID')) define('KONVO_DESIGN_CATEGORY_ID', (int)KONVO_HISTORY_CATEGORY_ID);
+if (!defined('KONVO_TECH_NEWS_CATEGORY_ID')) define('KONVO_TECH_NEWS_CATEGORY_ID', (int)KONVO_CHAT_CATEGORY_ID);
 if (!defined('KONVO_TITLE_MAX_CHARS')) define('KONVO_TITLE_MAX_CHARS', 64);
 if (!defined('KONVO_NEWS_DIGEST_TZ')) define('KONVO_NEWS_DIGEST_TZ', 'America/Los_Angeles');
 
@@ -92,18 +94,8 @@ function konvo_random_topic_fast_mode()
 }
 
 $bots = array(
-    array('username' => 'BayMax', 'name' => 'BayMax', 'soul_key' => 'baymax', 'soul_fallback' => 'You are BayMax. Write naturally, clearly, and concisely.'),
-    array('username' => 'vaultboy', 'name' => 'VaultBoy', 'soul_key' => 'vaultboy', 'soul_fallback' => 'You are VaultBoy. Casual, playful, and game-obsessed.'),
-    array('username' => 'MechaPrime', 'name' => 'MechaPrime', 'soul_key' => 'mechaprime', 'soul_fallback' => 'You are MechaPrime. Write naturally, clearly, and concisely.'),
-    array('username' => 'yoshiii', 'name' => 'Yoshiii', 'soul_key' => 'yoshiii', 'soul_fallback' => 'You are Yoshiii. Write naturally, playfully, and concisely.'),
-    array('username' => 'bobamilk', 'name' => 'BobaMilk', 'soul_key' => 'bobamilk', 'soul_fallback' => 'You are BobaMilk. Write in very short, simple, natural phrasing.'),
-    array('username' => 'wafflefries', 'name' => 'WaffleFries', 'soul_key' => 'wafflefries', 'soul_fallback' => 'You are WaffleFries. Write naturally, concise, and practical.'),
-    array('username' => 'quelly', 'name' => 'Quelly', 'soul_key' => 'quelly', 'soul_fallback' => 'You are Quelly. Write energetic, hands-on, and concise.'),
-    array('username' => 'sora', 'name' => 'Sora', 'soul_key' => 'sora', 'soul_fallback' => 'You are Sora. Write calm, observant, and concise.'),
-    array('username' => 'sarah_connor', 'name' => 'Sarah', 'soul_key' => 'sarah_connor', 'soul_fallback' => 'You are Sarah Connor. Write practical, skeptical, and concise.'),
-    array('username' => 'ellen1979', 'name' => 'Ellen', 'soul_key' => 'ellen1979', 'soul_fallback' => 'You are Ellen1979. Write resilient, technical, and concise.'),
-    array('username' => 'arthurdent', 'name' => 'Arthur', 'soul_key' => 'arthurdent', 'soul_fallback' => 'You are ArthurDent. Write witty, curious, and concise.'),
-    array('username' => 'hariseldon', 'name' => 'Hari', 'soul_key' => 'hariseldon', 'soul_fallback' => 'You are HariSeldon. Write analytical, strategic, and concise.'),
+    array('username' => 'higuyer', 'name' => 'higuyer', 'soul_key' => 'higuyer', 'soul_fallback' => 'You are higuyer. Reflective, history-aware, and conversational.'),
+    array('username' => 'BAI', 'name' => 'BAI', 'soul_key' => 'bai', 'soul_fallback' => 'You are BAI. Friendly, social, and concise.'),
 );
 
 $feed_sources = array(
@@ -2317,6 +2309,16 @@ function find_bot_by_username($bots, $username)
     return null;
 }
 
+function bot_for_category_id($bots, int $categoryId)
+{
+    $targetUsername = ($categoryId === (int)KONVO_HISTORY_CATEGORY_ID) ? 'higuyer' : 'bai';
+    $picked = find_bot_by_username($bots, $targetUsername);
+    if (is_array($picked)) {
+        return $picked;
+    }
+    return is_array($bots[0] ?? null) ? $bots[0] : array('username' => 'BAI', 'name' => 'BAI', 'soul_key' => 'bai');
+}
+
 $providedKey = isset($_GET['key']) ? (string)$_GET['key'] : (isset($_POST['key']) ? (string)$_POST['key'] : '');
 if (KONVO_SECRET === '') {
     out_json(500, array('ok' => false, 'error' => 'DISCOURSE_WEBHOOK_SECRET is not configured on the server.'));
@@ -2398,12 +2400,9 @@ if ($confirmPost) {
     $categoryDecision = konvo_pick_topic_category_decision($title, $raw, $pickedContext);
     $categoryId = (int)($categoryDecision['category_id'] ?? (int)KONVO_CATEGORY_ID);
     $forcedGamingAuthor = false;
-    if ($categoryId === (int)KONVO_GAMING_CATEGORY_ID) {
-        $vaultboyBot = find_bot_by_username($bots, 'vaultboy');
-        if (is_array($vaultboyBot)) {
-            $bot = $vaultboyBot;
-            $forcedGamingAuthor = true;
-        }
+    $bot = bot_for_category_id($bots, $categoryId);
+    $pickedIsGaming = !empty($payload['picked_is_gaming']);
+    if ($pickedIsGaming) {
         if (!konvo_has_youtube_video_url($raw)) {
             $yt = konvo_pick_gaming_youtube_url($pickedContext);
             if ($yt !== '') {
@@ -2529,8 +2528,6 @@ if (!is_array($digestItems) || $digestItems === array()) {
 }
 
 $picked = $digestItems[0];
-shuffle($bots);
-$bot = $bots[0];
 $titleRes = konvo_generate_digest_title_with_llm($digestItems);
 if (!is_array($titleRes) || empty($titleRes['ok']) || !isset($titleRes['title'])) {
     $fallbackTitle = konvo_news_digest_title_with_date('tech stories worth your attention');
@@ -2573,6 +2570,7 @@ $categoryDecision = array(
     'confidence' => 1.0,
 );
 $categoryId = (int)KONVO_TECH_NEWS_CATEGORY_ID;
+$bot = bot_for_category_id($bots, $categoryId);
 $pickedLooksGaming = false;
 
 $previewPayload = array(

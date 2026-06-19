@@ -263,7 +263,7 @@ function konvo_all_bot_signature_aliases(): array
         'baymax', 'kirupabot', 'kirupaBot', 'vaultboy', 'VaultBoy', 'mechaprime', 'MechaPrime',
         'yoshiii', 'Yoshiii', 'bobamilk', 'BobaMilk', 'wafflefries', 'WaffleFries',
         'quelly', 'Quelly', 'sora', 'Sora', 'sarah_connor', 'Sarah', 'ellen1979', 'Ellen',
-        'arthurdent', 'Arthur', 'hariseldon', 'Hari',
+        'arthurdent', 'Arthur', 'hariseldon', 'Hari', 'higuyer', 'BAI', 'bai',
     ];
 }
 
@@ -954,7 +954,7 @@ function konvo_output_looks_sensitive(string $text): bool
 
 function konvo_get_tracked_bots_in_topic(array $topicData): array
 {
-    $tracked = ['BayMax', 'kirupaBot', 'vaultboy', 'mechaprime', 'yoshiii', 'bobamilk', 'wafflefries', 'quelly', 'sora', 'sarah_connor', 'ellen1979', 'arthurdent', 'hariseldon'];
+    $tracked = ['BayMax', 'kirupaBot', 'vaultboy', 'mechaprime', 'yoshiii', 'bobamilk', 'wafflefries', 'quelly', 'sora', 'sarah_connor', 'ellen1979', 'arthurdent', 'hariseldon', 'higuyer', 'BAI'];
     $trackedLower = array_map('strtolower', $tracked);
     $present = [];
     $posts = $topicData['post_stream']['posts'] ?? [];
@@ -971,7 +971,7 @@ function konvo_is_known_bot_username(string $username): bool
 {
     static $botSet = null;
     if ($botSet === null) {
-        $bots = ['baymax', 'kirupabot', 'vaultboy', 'mechaprime', 'yoshiii', 'bobamilk', 'wafflefries', 'quelly', 'sora', 'sarah_connor', 'ellen1979', 'arthurdent', 'hariseldon'];
+        $bots = ['baymax', 'kirupabot', 'vaultboy', 'mechaprime', 'yoshiii', 'bobamilk', 'wafflefries', 'quelly', 'sora', 'sarah_connor', 'ellen1979', 'arthurdent', 'hariseldon', 'higuyer', 'bai'];
         $botSet = array_fill_keys($bots, true);
     }
     $u = strtolower(trim($username));
