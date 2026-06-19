@@ -268,7 +268,7 @@ function konvo_soul_build_topic_system_prompt(string $soulPrompt, array $rules, 
         $parts[] = '【语言锁定】title 与 raw 必须全部使用简体中文书写，禁止英文正文或英文标题。'
             . 'plan_* 字段可简短英文，但 title/raw 不得出现英文句子。';
     }
-    $parts[] = '若 SOUL 要求陈述句结尾，则 title 与 raw 全文都不得出现疑问句、问号、或“大家怎么看/欢迎讨论/如果方便请分享”等互动式收束。';
+    $parts[] = '若 SOUL 要求陈述句结尾，则 title 不得是问句；raw 结尾段不得有问号或“大家怎么看/欢迎讨论”等互动式收束。正文中间可以使用“如何”“什么”等词做科普叙述，但全文不得出现问号（？或?）。';
     $parts[] = '内容必须真实、非虚构；不得编造事实、数据、引语、来源、书目或网址，除非 SOUL 明确允许。';
     $parts[] = '严禁重复：不得与近期论坛话题或本 bot 近期帖子重复，也不得仅改写标题、换同义词或重排段落。必须提供明显不同的主题角度。';
     $parts[] = '不要签名；Discourse 已显示作者用户名。不要输出解释文字，只输出 JSON。';
@@ -378,19 +378,105 @@ function konvo_soul_retry_hint_for_error(string $errorBlob): string
     return '';
 }
 
-function konvo_soul_text_has_question(string $text): bool
+function konvo_soul_count_paragraphs(string $raw): int
 {
-    $text = trim($text);
-    if ($text === '') {
+    $raw = konvo_soul_sanitize_utf8(trim($raw));
+    if ($raw === '') {
+        return 0;
+    }
+    $raw = preg_replace('/\n{3,}/', "\n\n", $raw) ?? $raw;
+    $parts = preg_split('/\n\s*\n/', $raw);
+    if (!is_array($parts)) {
+        return 1;
+    }
+    $count = 0;
+    foreach ($parts as $part) {
+        if (trim((string)$part) !== '') {
+            $count++;
+        }
+    }
+    return max(1, $count);
+}
+
+function konvo_soul_fix_inline_newlines(string $raw): string
+{
+    $raw = str_replace(array("\r\n", "\r"), "\n", $raw);
+    $raw = preg_replace('/(?<=[\x{4e00}-\x{9fff}])\n(?=[\x{4e00}-\x{9fff}])/u', '', $raw) ?? $raw;
+    return $raw;
+}
+
+function konvo_soul_normalize_paragraphs(string $raw, int $minPara, int $maxPara): string
+{
+    $raw = konvo_soul_fix_inline_newlines(konvo_soul_sanitize_utf8(trim($raw)));
+    $raw = preg_replace('/\n{3,}/', "\n\n", $raw) ?? $raw;
+    $parts = preg_split('/\n\s*\n/', $raw);
+    if (!is_array($parts)) {
+        return trim($raw);
+    }
+    $blocks = array();
+    foreach ($parts as $part) {
+        $part = trim((string)$part);
+        if ($part !== '') {
+            $blocks[] = $part;
+        }
+    }
+    if ($blocks === array()) {
+        return trim($raw);
+    }
+    if ($maxPara > 0) {
+        while (count($blocks) > $maxPara) {
+            $last = array_pop($blocks);
+            $blocks[count($blocks) - 1] .= "\n\n" . $last;
+        }
+    }
+    return implode("\n\n", $blocks);
+}
+
+function konvo_soul_text_has_question_mark(string $text): bool
+{
+    return str_contains($text, '？') || str_contains($text, '?');
+}
+
+function konvo_soul_title_is_question(string $title): bool
+{
+    $title = trim($title);
+    if ($title === '') {
         return false;
     }
-    if (str_contains($text, '？') || str_contains($text, '?')) {
+    if (konvo_soul_text_has_question_mark($title)) {
         return true;
     }
-    if (preg_match('/(吗|呢)[。！]?$/u', $text)) {
+    if (preg_match('/(吗|呢)[。！]?$/u', $title)) {
         return true;
     }
-    return (bool)preg_match('/(?:什么|怎么|如何|为何|为什么|哪些|哪几|难道|是不是|从何而来|何以|能否)/u', $text);
+    return (bool)preg_match('/^(?:为什么|为何|怎么|如何|什么|哪些)/u', $title);
+}
+
+function konvo_soul_body_has_forbidden_question(string $raw): bool
+{
+    if (konvo_soul_has_interactive_closing($raw)) {
+        return true;
+    }
+    $parts = preg_split('/\n\s*\n/', trim($raw));
+    if (!is_array($parts) || $parts === array()) {
+        return konvo_soul_text_has_question_mark($raw);
+    }
+    $last = trim((string)end($parts));
+    if ($last === '') {
+        return false;
+    }
+    if (konvo_soul_text_has_question_mark($last)) {
+        return true;
+    }
+    if (preg_match('/(吗|呢)[。！]?$/u', $last)) {
+        return true;
+    }
+    return (bool)preg_match('/(?:你觉得|大家怎么看|你认为|你知道吗|是不是|欢迎讨论|如果方便)[？?]?$/u', $last);
+}
+
+function konvo_soul_text_has_question(string $text): bool
+{
+    return konvo_soul_title_is_question($text) || konvo_soul_body_has_forbidden_question($text);
 }
 
 function konvo_soul_has_interactive_closing(string $raw): bool
@@ -418,6 +504,13 @@ function konvo_soul_prepare_topic(string $title, string $raw, array $rules): arr
 {
     $title = konvo_soul_sanitize_utf8(trim($title));
     $raw = konvo_soul_sanitize_utf8(trim($raw));
+    $minPara = (int)($rules['min_paragraphs'] ?? 0);
+    $maxPara = (int)($rules['max_paragraphs'] ?? 0);
+    if ($minPara > 0 || $maxPara > 0) {
+        $raw = konvo_soul_normalize_paragraphs($raw, $minPara, $maxPara > 0 ? $maxPara : 99);
+    } else {
+        $raw = konvo_soul_fix_inline_newlines($raw);
+    }
     $minHan = (int)($rules['min_han_chars'] ?? 0);
     if ($minHan > 0) {
         $han = konvo_soul_count_han_chars($raw);
@@ -425,13 +518,14 @@ function konvo_soul_prepare_topic(string $title, string $raw, array $rules): arr
             $raw = konvo_soul_expand_han_chars($raw, $minHan + 8, konvo_soul_pick_closing_suffix());
         }
     }
-    $minPara = (int)($rules['min_paragraphs'] ?? 0);
     if ($minPara > 0) {
-        $paraCount = preg_match_all('/\n\s*\n/u', $raw, $m);
-        $blocks = (is_int($paraCount) ? $paraCount : 0) + 1;
+        $blocks = konvo_soul_count_paragraphs($raw);
         while ($blocks < $minPara) {
             $raw .= "\n\n" . konvo_soul_pick_closing_suffix();
             $blocks++;
+        }
+        if ($maxPara > 0 && $blocks > $maxPara) {
+            $raw = konvo_soul_normalize_paragraphs($raw, $minPara, $maxPara);
         }
     }
     return array('title' => $title, 'raw' => trim($raw));
@@ -500,24 +594,24 @@ function konvo_soul_validate_topic(string $title, string $raw, array $rules, boo
     $minPara = (int)($rules['min_paragraphs'] ?? 0);
     $maxPara = (int)($rules['max_paragraphs'] ?? 0);
     if ($minPara > 0 || $maxPara > 0) {
-        $paraCount = preg_match_all('/\n\s*\n/u', $raw, $m);
-        $blocks = (is_int($paraCount) ? $paraCount : 0) + 1;
-        $needMin = $relaxed ? max(1, $minPara - 1) : $minPara;
+        $blocks = konvo_soul_count_paragraphs($raw);
+        $needMin = $minPara;
         $needMax = $maxPara > 0 ? $maxPara : 99;
         if ($blocks < $needMin || $blocks > $needMax) {
-            return array('ok' => false, 'error' => 'SOUL requires ' . $needMin . '-' . $needMax . ' paragraphs');
+            return array(
+                'ok' => false,
+                'error' => 'SOUL requires ' . $needMin . '-' . $needMax . ' paragraphs',
+                'paragraph_count' => $blocks,
+            );
         }
     }
 
-    if (!empty($rules['statement_ending']) && !$relaxed) {
-        if (konvo_soul_text_has_question($title)) {
+    if (!empty($rules['statement_ending'])) {
+        if (konvo_soul_title_is_question($title)) {
             return array('ok' => false, 'error' => 'SOUL forbids question-style title');
         }
-        if (konvo_soul_text_has_question($raw)) {
-            return array('ok' => false, 'error' => 'SOUL forbids question marks or question phrasing in body');
-        }
-        if (konvo_soul_has_interactive_closing($raw)) {
-            return array('ok' => false, 'error' => 'SOUL forbids interactive discussion-style closing');
+        if (konvo_soul_body_has_forbidden_question($raw)) {
+            return array('ok' => false, 'error' => 'SOUL forbids question marks or question-style closing in body');
         }
     }
 

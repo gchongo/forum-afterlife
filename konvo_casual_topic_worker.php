@@ -33,7 +33,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v10');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v11');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -962,7 +962,7 @@ function casual_append_quirky_media_before_signature(string $raw, string $signat
 
 function casual_normalize_body(string $raw, string $signature): string
 {
-    $raw = konvo_soul_sanitize_utf8(str_replace(array("\r\n", "\r"), "\n", (string)$raw));
+    $raw = konvo_soul_fix_inline_newlines(konvo_soul_sanitize_utf8(str_replace(array("\r\n", "\r"), "\n", (string)$raw)));
     $raw = trim($raw);
     $raw = preg_replace('/\n{3,}/', "\n\n", $raw) ?? $raw;
     if ($raw === '') return '';
@@ -1280,7 +1280,7 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
     $title = $prepared['title'];
     $raw = $prepared['raw'];
 
-    $valid = konvo_soul_validate_topic($title, $raw, $rules, $strict);
+    $valid = konvo_soul_validate_topic($title, $raw, $rules, false);
     if (!$valid['ok']) {
         return array(
             'ok' => false,
