@@ -43,6 +43,10 @@ if (!defined('KONVO_TOPIC_FAST_MODE')) {
     $fastModeEnv = strtolower(trim((string)getenv('KONVO_TOPIC_FAST_MODE')));
     define('KONVO_TOPIC_FAST_MODE', ($fastModeEnv === '' || in_array($fastModeEnv, array('1', 'true', 'yes', 'on'), true)));
 }
+if (!defined('KONVO_CASUAL_DAILY_CAP')) {
+    $dailyCapRaw = trim((string)getenv('KONVO_CASUAL_DAILY_CAP'));
+    define('KONVO_CASUAL_DAILY_CAP', ($dailyCapRaw === '' ? 0 : max(0, (int)$dailyCapRaw)));
+}
 if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((string)(getenv('LLM_API_KEY') ?: getenv('DEEPSEEK_API_KEY') ?: getenv('OPENAI_API_KEY'))));
 if (!defined('KONVO_LLM_CHAT_COMPLETIONS_URL')) define('KONVO_LLM_CHAT_COMPLETIONS_URL', rtrim((string)(getenv('LLM_API_BASE_URL') ?: getenv('OPENAI_API_BASE') ?: 'https://api.deepseek.com'), '/') . '/chat/completions');
 if (!defined('KONVO_SECRET')) define('KONVO_SECRET', trim((string)getenv('DISCOURSE_WEBHOOK_SECRET')));
@@ -1547,16 +1551,18 @@ $signature = function_exists('konvo_signature_with_optional_emoji')
     ? konvo_signature_with_optional_emoji((string)($bot['name'] ?? 'BAI'), $signatureSeed)
     : (string)($bot['name'] ?? 'BAI');
 $today = casual_today_key();
-if (!$dryRun && !$force) {
+$dailyCap = (int)KONVO_CASUAL_DAILY_CAP;
+if (!$dryRun && !$force && $dailyCap > 0) {
     $todayCount = casual_daily_count_for($today);
-    if ($todayCount >= 3) {
+    if ($todayCount >= $dailyCap) {
         casual_out(200, array(
             'ok' => true,
             'posted' => false,
             'reason' => 'daily_casual_topic_cap_reached',
             'date' => $today,
             'today_post_count' => $todayCount,
-            'daily_cap' => 3,
+            'daily_cap' => $dailyCap,
+            'hint' => 'Pass force=1 to bypass, or set KONVO_CASUAL_DAILY_CAP=0 in .env for no limit.',
         ));
     }
 }
@@ -1739,7 +1745,7 @@ casual_out(200, array(
     'daily_cap' => array(
         'date' => $today,
         'count_after_post' => $todayCountAfterPost,
-        'max_per_day' => 3,
+        'max_per_day' => $dailyCap > 0 ? $dailyCap : null,
     ),
     'quirky_media' => array(
         'enabled' => $quirkyMode,
