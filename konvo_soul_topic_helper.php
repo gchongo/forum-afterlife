@@ -571,13 +571,13 @@ function konvo_soul_validate_content_quality(string $title, string $raw): ?strin
     if (str_contains($blob, '�') || preg_match('/\x{FFFD}/u', $blob)) {
         return 'text contains UTF-8 replacement characters (corrupt encoding)';
     }
-    if (preg_match('/[\x{4e00}-\x{9fff}]\n[\x{4e00}-\x{9fff}]/u', $raw)) {
+    if (preg_match('~[\x{4e00}-\x{9fff}]\n[\x{4e00}-\x{9fff}]~u', $raw)) {
         return 'inline newline remains in body (corrupt formatting)';
     }
-    if (preg_match('/[，。：；、""''(（][\x{4e00}-\x{9fff}][，。：；""'' )）]/u', $raw)) {
+    if (preg_match('~[，。：；、""\'\'(（][\x{4e00}-\x{9fff}][，。：；""\'\' )）]~u', $raw)) {
         return 'isolated single Chinese character between punctuation (likely missing text)';
     }
-    if (preg_match('/[""「『][\x{4e00}-\x{9fff}][""」』]/u', $raw)) {
+    if (preg_match('~[""「『][\x{4e00}-\x{9fff}][""」』]~u', $raw)) {
         return 'single Chinese character in quotation marks (incomplete term)';
     }
     if (preg_match('/国暗夜/u', $raw) || preg_match('/球过/u', $raw) || preg_match('/天越强/u', $raw)) {
