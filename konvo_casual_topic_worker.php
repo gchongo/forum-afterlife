@@ -11,9 +11,8 @@
 declare(strict_types=1);
 
 @set_time_limit(120);
+@ini_set('max_execution_time', '120');
 @ignore_user_abort(true);
-
-header('Content-Type: application/json; charset=utf-8');
 
 require_once __DIR__ . '/konvo_soul_helper.php';
 require_once __DIR__ . '/konvo_soul_topic_helper.php';
@@ -34,7 +33,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v6');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v7');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -63,6 +62,24 @@ if (!defined('KONVO_DESIGN_CATEGORY_ID')) define('KONVO_DESIGN_CATEGORY_ID', (in
 
 $bots = konvo_bot_registry_enabled();
 
+function casual_json_encode(array $data): string
+{
+    $flags = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE;
+    if (defined('JSON_INVALID_UTF8_SUBSTITUTE')) {
+        $flags |= JSON_INVALID_UTF8_SUBSTITUTE;
+    }
+    $json = json_encode($data, $flags);
+    if (is_string($json) && $json !== '') {
+        return $json;
+    }
+    return json_encode(array(
+        'ok' => false,
+        'error' => 'json_encode_failed',
+        'json_last_error' => function_exists('json_last_error_msg') ? json_last_error_msg() : 'unknown',
+        'worker_build' => (string)KONVO_WORKER_BUILD,
+    ), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '{"ok":false,"error":"json_encode_failed"}';
+}
+
 function casual_safe_substr(string $text, int $maxChars): string
 {
     return konvo_soul_safe_substr($text, $maxChars);
@@ -74,7 +91,7 @@ function casual_out(int $status, array $data): void
         http_response_code($status);
         header('Content-Type: application/json; charset=utf-8');
     }
-    echo json_encode($data, JSON_UNESCAPED_SLASHES);
+    echo casual_json_encode($data);
     exit;
 }
 
@@ -82,7 +99,12 @@ set_exception_handler(static function (\Throwable $e): void {
     $where = basename((string)$e->getFile()) . ':' . (int)$e->getLine();
     $msg = trim((string)$e->getMessage());
     if ($msg === '') $msg = 'Unhandled exception';
-    casual_out(500, array('ok' => false, 'error' => 'Casual worker exception: ' . $msg . ' [' . $where . ']'));
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json; charset=utf-8');
+    }
+    echo casual_json_encode(array('ok' => false, 'error' => 'Casual worker exception: ' . $msg . ' [' . $where . ']'));
+    exit;
 });
 
 register_shutdown_function(static function (): void {
@@ -90,12 +112,15 @@ register_shutdown_function(static function (): void {
     if (!is_array($err)) return;
     $fatal = array(E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR);
     if (!in_array((int)($err['type'] ?? 0), $fatal, true)) return;
-    if (headers_sent()) return;
 
     $msg = trim((string)($err['message'] ?? 'Fatal error'));
     $file = basename((string)($err['file'] ?? 'unknown'));
     $line = (int)($err['line'] ?? 0);
-    casual_out(500, array('ok' => false, 'error' => 'Casual worker fatal: ' . $msg . ' [' . $file . ':' . $line . ']'));
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json; charset=utf-8');
+    }
+    echo casual_json_encode(array('ok' => false, 'error' => 'Casual worker fatal: ' . $msg . ' [' . $file . ':' . $line . ']'));
 });
 
 function safe_hash_equals(string $a, string $b): bool
@@ -1354,6 +1379,7 @@ if (isset($_GET['ping']) && (string)$_GET['ping'] === '1') {
         'han_count_test' => $hanTest,
         'mbstring' => function_exists('mb_substr'),
         'llm_key_set' => KONVO_OPENAI_API_KEY !== '',
+        'max_execution_time' => (int)ini_get('max_execution_time'),
         'files' => array(
             'konvo_soul_topic_helper.php' => is_file(__DIR__ . '/konvo_soul_topic_helper.php'),
             'souls/bai.SOUL.md' => is_file(__DIR__ . '/souls/bai.SOUL.md'),
@@ -1597,7 +1623,7 @@ if ($dryRun) {
             'title' => $title,
             'category_id' => $categoryId,
             'han_chars' => konvo_soul_count_han_chars($raw),
-            'raw_preview' => $raw,
+            'raw_preview' => casual_safe_substr($raw, 800),
             'gaming_detected' => $gamingDetected,
             'category_decision' => $categoryDecision,
         ),
