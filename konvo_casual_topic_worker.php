@@ -34,6 +34,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v3');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -1194,7 +1195,8 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
             array('role' => 'system', 'content' => $system),
             array('role' => 'user', 'content' => $user),
         ),
-        'temperature' => 0.9,
+        'temperature' => 0.95,
+        'max_tokens' => !empty($rules['longform']) ? 2800 : 1200,
     );
 
     $res = casual_openai_json($payload, $rules);
@@ -1438,50 +1440,27 @@ for ($i = 0; $i < $maxAttempts; $i++) {
 }
 
 if (!is_array($generated) || empty($generated['ok'])) {
-    $seedForFallback = '';
-    foreach ($attempts as $a) {
-        if (!is_array($a)) continue;
-        $plan = $a['plan'] ?? null;
-        if (is_array($plan) && trim((string)($plan['seed_topic'] ?? '')) !== '') {
-            $seedForFallback = trim((string)$plan['seed_topic']);
-            break;
-        }
-    }
-    $template = casual_template_fallback($bot, $categoryId, $seedForFallback);
-    if (!empty($template['ok'])) {
-        $dup = casual_topic_too_similar(
-            (string)($template['title'] ?? ''),
-            (string)($template['raw'] ?? ''),
-            $recent,
-            $recentForumTitles
-        );
-        if (empty($dup['duplicate'])) {
-            $generated = $template;
-            $attempts[] = array('ok' => true, 'fallback' => true, 'note' => 'used template fallback after LLM failure');
-        } else {
-            $attempts[] = array(
-                'ok' => false,
-                'fallback' => true,
-                'error' => 'template fallback rejected as duplicate',
-                'duplicate' => $dup,
-            );
-        }
-    }
-}
-
-if (!is_array($generated) || empty($generated['ok'])) {
     $errors = array();
     foreach ($attempts as $a) {
         $errors[] = isset($a['error']) ? (string)$a['error'] : 'unknown generation failure';
     }
     casual_out(500, array(
         'ok' => false,
-        'error' => 'Failed to generate casual topic with model.',
+        'error' => 'Failed to generate a unique SOUL-compliant topic; nothing was posted.',
         'attempt_errors' => $errors,
         'attempt_count' => count($attempts),
         'fast_mode' => $fastMode,
+        'worker_build' => (string)KONVO_WORKER_BUILD,
         'elapsed_seconds' => round(microtime(true) - $requestStartTs, 2),
-        'hint' => 'Check LLM_API_KEY / DeepSeek quota. Topic was rejected for duplicate/similar content or SOUL mismatch.',
+        'hint' => 'Template fallback is disabled. Fix LLM_API_KEY/quota, or wait and retry. Verify worker_build on server matches latest git pull.',
+    ));
+}
+
+if (!empty($generated['fallback'])) {
+    casual_out(500, array(
+        'ok' => false,
+        'error' => 'Template fallback is disabled; refusing to post boilerplate content.',
+        'worker_build' => (string)KONVO_WORKER_BUILD,
     ));
 }
 
@@ -1508,7 +1487,8 @@ if (empty($finalSoulCheck['ok'])) {
         'error' => 'Generated topic failed final SOUL validation; post blocked.',
         'validation' => $finalSoulCheck,
         'han_chars' => konvo_soul_count_han_chars($raw),
-        'used_fallback' => !empty($generated['fallback']),
+        'used_fallback' => false,
+        'worker_build' => (string)KONVO_WORKER_BUILD,
         'soul_rules' => $soulRulesRun,
         'title_preview' => $title,
     ));
@@ -1535,7 +1515,8 @@ if ($dryRun) {
         'post_as' => (string)($bot['username'] ?? ''),
         'plan' => $plan,
         'lane' => $lane,
-        'used_fallback' => !empty($generated['fallback']),
+        'used_fallback' => false,
+        'worker_build' => (string)KONVO_WORKER_BUILD,
         'topic_mode' => $topicModeRun,
         'soul_rules' => $soulRulesRun,
         'fast_mode' => $fastMode,
@@ -1583,7 +1564,8 @@ casual_out(200, array(
     'post_as' => (string)($post['post_as'] ?? ''),
     'plan' => $plan,
     'lane' => $lane,
-    'used_fallback' => !empty($generated['fallback']),
+    'used_fallback' => false,
+    'worker_build' => (string)KONVO_WORKER_BUILD,
     'topic_mode' => $topicModeRun,
     'soul_rules' => $soulRulesRun,
     'fast_mode' => $fastMode,

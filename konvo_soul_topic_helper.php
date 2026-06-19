@@ -211,6 +211,47 @@ function konvo_soul_build_topic_system_prompt(string $soulPrompt, array $rules, 
     return implode("\n", $parts);
 }
 
+function konvo_soul_is_boilerplate_topic(string $title, string $raw): bool
+{
+    $blob = trim($title . "\n" . $raw);
+    if ($blob === '') {
+        return true;
+    }
+    $patterns = array(
+        '/关于「.+」.*新想法/u',
+        '/大家最近有什么新想法/u',
+        '/想听听/u',
+        '/如果方便/u',
+        '/欢迎分享/u',
+        '/欢迎补充/u',
+        '/有什么看法/u',
+        '/是一个值得从制度、财政/u',
+        '/很多人第一次接触「/u',
+        '/从史料来看，我们往往更容易记住事件本身/u',
+        '/最近在浏览论坛时，我又想到/u',
+        '/有时候同一个问题，不同人的经历/u',
+    );
+    foreach ($patterns as $p) {
+        if (preg_match($p, $blob)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function konvo_soul_pick_opening_style(): string
+{
+    $styles = array(
+        '从一个具体现象或细节切入，不要写空泛总起句',
+        '从一个常见误解切入，先指出误解再展开',
+        '从两个时期或两个地区的对照切入',
+        '从一个日常观察切入，再连接到知识背景',
+        '从一个被忽视的细节切入，再扩展到整体',
+        '从一次具体变化或转折切入，再解释原因',
+    );
+    shuffle($styles);
+    return (string)$styles[0];
+}
 function konvo_soul_build_topic_user_prompt(
     string $seedTopic,
     array $rules,
@@ -222,6 +263,9 @@ function konvo_soul_build_topic_user_prompt(
     $lines = array();
     $lines[] = "参考主题（可改写、可忽略，但必须符合 SOUL 的话题范围）：{$seedTopic}";
     $lines[] = '请严格按 SOUL 生成一篇可发帖的话题内容。';
+    $lines[] = '本篇开头方式：' . konvo_soul_pick_opening_style() . '。';
+    $lines[] = '标题必须是具体名词短语，不得使用「关于…大家有什么新想法」这类讨论式标题。';
+    $lines[] = '禁止套用固定模板；每篇的开头、段落顺序、举例方式都要明显不同。';
     $lines[] = 'plan_lane 用一个简短标签概括方向。';
     if ($recentHints !== '') {
         $lines[] = "避免与近期帖子重复：\n{$recentHints}";
@@ -339,6 +383,10 @@ function konvo_soul_validate_topic(string $title, string $raw, array $rules, boo
 
     if (empty($rules['allow_code_blocks']) && strpos($raw, '```') !== false) {
         return array('ok' => false, 'error' => 'code block not expected for this SOUL topic');
+    }
+
+    if (konvo_soul_is_boilerplate_topic($title, $raw)) {
+        return array('ok' => false, 'error' => 'content matches forbidden boilerplate template');
     }
 
     return array('ok' => true);
