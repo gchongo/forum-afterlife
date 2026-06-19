@@ -158,7 +158,7 @@ function konvo_soul_topic_llm_timeout(array $rules): int
     $fastModeEnv = strtolower(trim((string)getenv('KONVO_TOPIC_FAST_MODE')));
     $fastMode = ($fastModeEnv === '' || in_array($fastModeEnv, array('1', 'true', 'yes', 'on'), true));
     if (!empty($rules['longform'])) {
-        return $fastMode ? 45 : 35;
+        return $fastMode ? 90 : 75;
     }
     return $fastMode ? 28 : 22;
 }
@@ -202,18 +202,37 @@ function konvo_soul_default_seed_pool(string $soulRaw, array $rules): array
     );
 }
 
+function konvo_soul_safe_substr(string $text, int $maxChars): string
+{
+    if ($maxChars <= 0 || $text === '') {
+        return '';
+    }
+    if (function_exists('mb_substr')) {
+        return (string)mb_substr($text, 0, $maxChars, 'UTF-8');
+    }
+    if (strlen($text) <= $maxChars) {
+        return $text;
+    }
+    $slice = substr($text, 0, $maxChars);
+    return preg_replace('/[\x80-\xBF]+$/', '', $slice) ?? $slice;
+}
+
 function konvo_soul_build_topic_system_prompt(string $soulPrompt, array $rules, int $categoryId): string
 {
     $parts = array();
+    $isZh = (($rules['language'] ?? 'any') === 'zh');
+    if ($isZh) {
+        $parts[] = '【最高优先级】你是中文论坛发帖助手。title 与 raw 必须全部使用简体中文。禁止英文标题、英文正文、英文段落。';
+    }
     if ($soulPrompt !== '') {
-        $parts[] = "Bot SOUL（最高优先级，必须完全遵守）：\n{$soulPrompt}";
+        $parts[] = "Bot SOUL（必须完全遵守）：\n{$soulPrompt}";
     }
     $parts[] = '你的任务是：为该 bot 创建一篇可直接发布到 Discourse 论坛的新话题帖。';
     $parts[] = '只返回 JSON，结构为：'
         . '{"plan_mood":"...","plan_angle":"...","plan_posting_intent":"...","plan_lane":"...","title":"...","raw":"..."}。';
     $parts[] = 'SOUL 中的所有语言、长度、结构、风格、禁区、准确性规则，优先于任何默认行为。';
     $parts[] = '若 SOUL 要求中文科普长文，则 title 与 raw 必须中文，raw 必须超过 500 个中文字符，且 3 到 6 段。';
-    if (($rules['language'] ?? 'any') === 'zh') {
+    if ($isZh) {
         $parts[] = '【语言锁定】title 与 raw 必须全部使用简体中文书写，禁止英文正文或英文标题。'
             . 'plan_* 字段可简短英文，但 title/raw 不得出现英文句子。';
     }
@@ -399,7 +418,7 @@ function konvo_soul_validate_topic(string $title, string $raw, array $rules, boo
             'han_chars' => $hanBody,
             'han_total' => $hanTotal,
             'latin_chars' => $latinTotal,
-            'title_preview' => mb_substr($title, 0, 80, 'UTF-8'),
+            'title_preview' => konvo_soul_safe_substr($title, 80),
         );
     }
 

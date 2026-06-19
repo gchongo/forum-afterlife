@@ -34,7 +34,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v5');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v6');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -62,6 +62,11 @@ if (!defined('KONVO_GAMING_CATEGORY_ID')) define('KONVO_GAMING_CATEGORY_ID', (in
 if (!defined('KONVO_DESIGN_CATEGORY_ID')) define('KONVO_DESIGN_CATEGORY_ID', (int)KONVO_HISTORY_CATEGORY_ID);
 
 $bots = konvo_bot_registry_enabled();
+
+function casual_safe_substr(string $text, int $maxChars): string
+{
+    return konvo_soul_safe_substr($text, $maxChars);
+}
 
 function casual_out(int $status, array $data): void
 {
@@ -1189,19 +1194,33 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
         $extraAvoidance
     );
 
+    $isZh = (($rules['language'] ?? 'any') === 'zh');
     $payload = array(
         'model' => konvo_model_for_task('casual_topic'),
         'messages' => array(
             array('role' => 'system', 'content' => $system),
             array('role' => 'user', 'content' => $user),
         ),
-        'temperature' => 0.95,
-        'max_tokens' => !empty($rules['longform']) ? 2800 : 1200,
+        'temperature' => $isZh ? 0.75 : 0.95,
+        'max_tokens' => !empty($rules['longform']) ? 2200 : 1200,
     );
+    if ($isZh) {
+        $payload['response_format'] = array('type' => 'json_object');
+    }
 
     $res = casual_openai_json($payload, $rules);
+    if (!$res['ok'] && $isZh && !empty($payload['response_format'])) {
+        unset($payload['response_format']);
+        $res = casual_openai_json($payload, $rules);
+    }
     if (!$res['ok']) {
-        return array('ok' => false, 'error' => 'OpenAI request failed', 'detail' => $res['error'], 'status' => $res['status']);
+        return array(
+            'ok' => false,
+            'error' => 'OpenAI request failed',
+            'detail' => $res['error'],
+            'status' => $res['status'],
+            'llm_snippet' => casual_safe_substr((string)($res['raw'] ?? ''), 240),
+        );
     }
 
     $json = $res['json'];
@@ -1212,7 +1231,12 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
 
     $obj = casual_extract_json_object($content);
     if (!is_array($obj) || $obj === array()) {
-        return array('ok' => false, 'error' => 'Model returned non-JSON content', 'raw' => $content);
+        return array(
+            'ok' => false,
+            'error' => 'Model returned non-JSON content',
+            'raw' => casual_safe_substr($content, 400),
+            'llm_snippet' => casual_safe_substr($content, 240),
+        );
     }
 
     $title = casual_normalize_title((string)($obj['title'] ?? ''));
@@ -1236,6 +1260,7 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
             'han_chars' => konvo_soul_count_han_chars($raw),
             'latin_chars' => konvo_soul_count_latin_chars($title . "\n" . $raw),
             'validation' => $valid,
+            'llm_snippet' => casual_safe_substr($content, 240),
         );
     }
 
@@ -1321,10 +1346,14 @@ if ($providedKey === '' || !safe_hash_equals(KONVO_SECRET, $providedKey)) {
 }
 
 if (isset($_GET['ping']) && (string)$_GET['ping'] === '1') {
+    $hanTest = konvo_soul_count_han_chars('中国历史科普测试');
     casual_out(200, array(
         'ok' => true,
         'ping' => true,
         'worker_build' => (string)KONVO_WORKER_BUILD,
+        'han_count_test' => $hanTest,
+        'mbstring' => function_exists('mb_substr'),
+        'llm_key_set' => KONVO_OPENAI_API_KEY !== '',
         'files' => array(
             'konvo_soul_topic_helper.php' => is_file(__DIR__ . '/konvo_soul_topic_helper.php'),
             'souls/bai.SOUL.md' => is_file(__DIR__ . '/souls/bai.SOUL.md'),
@@ -1411,7 +1440,7 @@ $topicModeRun = !empty($soulRulesRun['longform']) ? 'soul_longform' : 'soul';
 $requestStartTs = isset($_SERVER['REQUEST_TIME_FLOAT']) ? (float)$_SERVER['REQUEST_TIME_FLOAT'] : microtime(true);
 $fastMode = (bool)KONVO_TOPIC_FAST_MODE;
 $maxAttempts = $fastMode ? 3 : 4;
-$requestBudget = !empty($soulRulesRun['longform']) ? 65.0 : 55.0;
+$requestBudget = !empty($soulRulesRun['longform']) ? 110.0 : 55.0;
 
 for ($i = 0; $i < $maxAttempts; $i++) {
     if ((microtime(true) - $requestStartTs) > $requestBudget) {
@@ -1459,7 +1488,10 @@ for ($i = 0; $i < $maxAttempts; $i++) {
         $closest = trim((string)($res['duplicate']['closest_title'] ?? ''));
     }
     $pieces = array();
-    if ($err !== '') $pieces[] = $err;
+    if ($err !== '') {
+        $retryHint = konvo_soul_retry_hint_for_error($err);
+        $pieces[] = $retryHint !== '' ? $retryHint : $err;
+    }
     if ($closest !== '') $pieces[] = 'Too close to: ' . $closest;
     if ($gateHint !== '') $pieces[] = 'Rewrite hint: ' . $gateHint;
     $extraAvoidance = implode(' ', $pieces);
@@ -1474,12 +1506,15 @@ if (!is_array($generated) || empty($generated['ok'])) {
             'error' => isset($a['error']) ? (string)$a['error'] : 'unknown generation failure',
             'han_chars' => isset($a['han_chars']) ? (int)$a['han_chars'] : null,
             'latin_chars' => isset($a['latin_chars']) ? (int)$a['latin_chars'] : null,
-            'title_preview' => isset($a['title']) ? mb_substr((string)$a['title'], 0, 80, 'UTF-8') : '',
-            'raw_preview' => isset($a['raw']) ? mb_substr((string)$a['raw'], 0, 160, 'UTF-8') : '',
+            'title_preview' => isset($a['title']) ? casual_safe_substr((string)$a['title'], 80) : '',
+            'raw_preview' => isset($a['raw']) ? casual_safe_substr((string)$a['raw'], 160) : '',
+            'llm_snippet' => isset($a['llm_snippet']) ? (string)$a['llm_snippet'] : '',
+            'llm_status' => isset($a['status']) ? (int)$a['status'] : null,
         );
     }
-    casual_out(500, array(
+    casual_out(200, array(
         'ok' => false,
+        'posted' => false,
         'error' => 'Failed to generate a unique SOUL-compliant topic; nothing was posted.',
         'attempt_errors' => $errors,
         'attempt_details' => $attemptDetails,
