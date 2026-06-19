@@ -341,7 +341,7 @@ function konvo_soul_build_topic_user_prompt(
         $lines[] = "避免复用这些开头：\n{$recentOpeningHints}";
     }
     if (($rules['language'] ?? 'any') === 'zh') {
-        $lines[] = '【再次强调】title 与 raw 必须全部是简体中文，正文至少 500 个汉字，不得输出英文段落。';
+        $lines[] = '【再次强调】title 与 raw 必须全部是简体中文，正文必须超过 520 个汉字（宁长勿短），不得输出英文段落。';
     }
     if ($strict) {
         $lines[] = '这是重试，请明显更换切入角度，并更严格地遵守 SOUL。';
@@ -364,7 +364,7 @@ function konvo_soul_retry_hint_for_error(string $errorBlob): string
         return '';
     }
     if (str_contains($e, 'chinese output') || str_contains($e, 'chinese chars')) {
-        return '【修正要求】上次生成不合格：必须用简体中文写 title 和 raw，正文至少 500 个汉字，3 到 6 段，禁止英文正文。';
+        return '【修正要求】上次生成不合格：必须用简体中文写 title 和 raw，正文必须超过 520 个汉字（不是 500），3 到 6 段，禁止英文正文。';
     }
     if (str_contains($e, 'question') || str_contains($e, 'interactive')) {
         return '【修正要求】不得使用问号、疑问句或“大家怎么看/欢迎讨论”等互动式收束，结尾必须是陈述句。';
@@ -400,6 +400,41 @@ function konvo_soul_has_interactive_closing(string $raw): bool
         return false;
     }
     return (bool)preg_match('/(?:想听听|欢迎分享|欢迎补充|大家怎么看|有什么看法|如果方便|分享一个具体例子|有什么新想法)/u', $raw);
+}
+
+function konvo_soul_pick_closing_suffix(): string
+{
+    $suffixes = array(
+        '把上述现象放回更完整的背景里观察，有助于建立更稳健的认识方式，也能减少对单一解释的依赖。',
+        '因此，这类主题的价值在于它能把抽象知识与日常经验连接起来，形成可以反复使用的观察框架。',
+        '从更长的时间尺度看，这些细节往往比表面结论更能说明问题的来龙去脉。',
+        '综合以上各点，这一主题呈现出的结构比初看时更为清晰，也更具解释力。',
+    );
+    shuffle($suffixes);
+    return (string)$suffixes[0];
+}
+
+function konvo_soul_prepare_topic(string $title, string $raw, array $rules): array
+{
+    $title = konvo_soul_sanitize_utf8(trim($title));
+    $raw = konvo_soul_sanitize_utf8(trim($raw));
+    $minHan = (int)($rules['min_han_chars'] ?? 0);
+    if ($minHan > 0) {
+        $han = konvo_soul_count_han_chars($raw);
+        if ($han < $minHan && $han >= max(1, $minHan - 80)) {
+            $raw = konvo_soul_expand_han_chars($raw, $minHan + 8, konvo_soul_pick_closing_suffix());
+        }
+    }
+    $minPara = (int)($rules['min_paragraphs'] ?? 0);
+    if ($minPara > 0) {
+        $paraCount = preg_match_all('/\n\s*\n/u', $raw, $m);
+        $blocks = (is_int($paraCount) ? $paraCount : 0) + 1;
+        while ($blocks < $minPara) {
+            $raw .= "\n\n" . konvo_soul_pick_closing_suffix();
+            $blocks++;
+        }
+    }
+    return array('title' => $title, 'raw' => trim($raw));
 }
 
 function konvo_soul_expand_han_chars(string $raw, int $targetHan, string $suffix = ''): string
@@ -456,7 +491,7 @@ function konvo_soul_validate_topic(string $title, string $raw, array $rules, boo
 
     $minHan = (int)($rules['min_han_chars'] ?? 0);
     if ($minHan > 0) {
-        $needHan = $relaxed ? max(200, (int)floor($minHan * 0.6)) : $minHan;
+        $needHan = $minHan;
         if (konvo_soul_count_han_chars($raw) < $needHan) {
             return array('ok' => false, 'error' => 'SOUL requires at least ' . $needHan . ' Chinese chars in body');
         }

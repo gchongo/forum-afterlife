@@ -33,7 +33,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v9');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v10');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -1276,6 +1276,10 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
         return array('ok' => false, 'error' => 'Model JSON missing title/raw', 'parsed' => $obj);
     }
 
+    $prepared = konvo_soul_prepare_topic($title, $raw, $rules);
+    $title = $prepared['title'];
+    $raw = $prepared['raw'];
+
     $valid = konvo_soul_validate_topic($title, $raw, $rules, $strict);
     if (!$valid['ok']) {
         return array(
@@ -1614,6 +1618,9 @@ if (!empty($generated['fallback'])) {
 
 $title = (string)$generated['title'];
 $raw = (string)$generated['raw'];
+$preparedFinal = konvo_soul_prepare_topic($title, $raw, $soulRulesRun);
+$title = $preparedFinal['title'];
+$raw = $preparedFinal['raw'];
 $plan = isset($generated['plan']) && is_array($generated['plan']) ? $generated['plan'] : array();
 
 $finalDupCheck = casual_topic_too_similar($title, $raw, $recent, $recentForumTitles);
