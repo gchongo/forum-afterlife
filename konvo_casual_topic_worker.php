@@ -34,7 +34,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v3');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v4');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -1304,7 +1304,25 @@ if (KONVO_SECRET === '') {
     casual_out(500, array('ok' => false, 'error' => 'DISCOURSE_WEBHOOK_SECRET is not configured on the server.'));
 }
 if ($providedKey === '' || !safe_hash_equals(KONVO_SECRET, $providedKey)) {
-    casual_out(403, array('ok' => false, 'error' => 'Forbidden', 'hint' => 'Pass ?key=YOUR_SECRET'));
+    casual_out(403, array(
+        'ok' => false,
+        'error' => 'Forbidden',
+        'hint' => 'Pass ?key=YOUR_SECRET',
+        'worker_build' => (string)KONVO_WORKER_BUILD,
+    ));
+}
+
+if (isset($_GET['ping']) && (string)$_GET['ping'] === '1') {
+    casual_out(200, array(
+        'ok' => true,
+        'ping' => true,
+        'worker_build' => (string)KONVO_WORKER_BUILD,
+        'files' => array(
+            'konvo_soul_topic_helper.php' => is_file(__DIR__ . '/konvo_soul_topic_helper.php'),
+            'souls/bai.SOUL.md' => is_file(__DIR__ . '/souls/bai.SOUL.md'),
+            'souls/higuyer.SOUL.md' => is_file(__DIR__ . '/souls/higuyer.SOUL.md'),
+        ),
+    ));
 }
 if (KONVO_API_KEY === '') {
     casual_out(500, array('ok' => false, 'error' => 'DISCOURSE_API_KEY is not configured on the server.'));
