@@ -215,7 +215,7 @@ function casual_save_recent_topics(array $items): void
         return ((int)($b['ts'] ?? 0)) <=> ((int)($a['ts'] ?? 0));
     });
 
-    $clean = array_slice($clean, 0, 24);
+    $clean = array_slice($clean, 0, 60);
     @file_put_contents(casual_state_path(), json_encode($clean, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 }
 
@@ -471,14 +471,17 @@ function casual_lane_from_key(string $key, array $recent = array()): ?array
     );
 }
 
-function casual_fetch_latest_topic_titles(int $max = 30): array
+function casual_fetch_latest_topic_titles(int $max = 100, int $categoryId = 0): array
 {
     if (!function_exists('curl_init')) return array();
     $titles = array();
     $page = 0;
-    $maxPages = min(2, max(1, (int)ceil($max / 30)));
+    $maxPages = min(4, max(1, (int)ceil($max / 30)));
     while ($page < $maxPages && count($titles) < $max) {
         $url = rtrim(KONVO_BASE_URL, '/') . '/latest.json?order=created&ascending=false&page=' . $page;
+        if ($categoryId > 0) {
+            $url .= '&category=' . $categoryId;
+        }
         $ch = curl_init($url);
         curl_setopt_array($ch, array(
             CURLOPT_RETURNTRANSFER => true,
@@ -513,12 +516,7 @@ function casual_fetch_latest_topic_titles(int $max = 30): array
 
 function casual_normalized_title_key(string $title): string
 {
-    $s = strtolower(trim($title));
-    if ($s === '') return '';
-    $s = preg_replace('/https?:\/\/\S+/i', ' ', $s) ?? $s;
-    $s = preg_replace('/[^a-z0-9\s]/', ' ', $s) ?? $s;
-    $s = preg_replace('/\s+/', ' ', $s) ?? $s;
-    return trim($s);
+    return konvo_soul_normalize_title_key($title);
 }
 
 function casual_title_terms(string $title): array
@@ -571,27 +569,13 @@ function casual_title_similarity_score(string $a, string $b): float
 
 function casual_title_too_similar_to_recent(string $candidateTitle, array $recentTitles): bool
 {
-    $ck = casual_normalized_title_key($candidateTitle);
-    if ($ck === '') return true;
-    foreach ($recentTitles as $rt) {
-        $rt = trim((string)$rt);
-        if ($rt === '') continue;
-        if (casual_normalized_title_key($rt) === $ck) return true;
-        $sim = casual_title_similarity_score($candidateTitle, $rt);
-        if ($sim >= 0.58) return true;
-        $candTerms = casual_title_terms($candidateTitle);
-        $rtTerms = casual_title_terms($rt);
-        if ($candTerms !== array() && $rtTerms !== array()) {
-            $setA = array_fill_keys($candTerms, true);
-            $overlap = 0;
-            foreach ($rtTerms as $tok) {
-                if (isset($setA[$tok])) $overlap++;
-            }
-            // Catch "different wording, same core topic" pairs like tutorials+games.
-            if ($overlap >= 2 && $sim >= 0.36) return true;
-        }
-    }
-    return false;
+    $dup = konvo_soul_topic_is_duplicate($candidateTitle, '', array(), $recentTitles);
+    return !empty($dup['duplicate']);
+}
+
+function casual_topic_too_similar(string $candidateTitle, string $candidateRaw, array $recentLocal, array $recentForumTitles): array
+{
+    return konvo_soul_topic_is_duplicate($candidateTitle, $candidateRaw, $recentLocal, $recentForumTitles);
 }
 
 function casual_topic_text_terms(string $title, string $raw = ''): array
@@ -623,16 +607,8 @@ function casual_semantic_similarity(string $titleA, string $rawA, string $titleB
 
 function casual_candidate_too_close_to_recent_local(string $candidateTitle, string $candidateRaw, array $recentLocal): bool
 {
-    foreach ($recentLocal as $item) {
-        if (!is_array($item)) continue;
-        $rt = trim((string)($item['title'] ?? ''));
-        if ($rt === '') continue;
-        $rr = trim((string)($item['raw'] ?? ''));
-        $sim = casual_semantic_similarity($candidateTitle, $candidateRaw, $rt, $rr);
-        if ($sim >= 0.41) return true;
-        if (casual_title_too_similar_to_recent($candidateTitle, array($rt))) return true;
-    }
-    return false;
+    $dup = konvo_soul_topic_is_duplicate($candidateTitle, $candidateRaw, $recentLocal, array());
+    return !empty($dup['duplicate']);
 }
 
 function casual_uniqueness_gate_with_llm(string $candidateTitle, string $candidateRaw, array $recentLocal, array $recentForum): array
@@ -653,7 +629,9 @@ function casual_uniqueness_gate_with_llm(string $candidateTitle, string $candida
 
     $system = 'You are a strict novelty judge for forum topic proposals. '
         . 'Return ONLY JSON with schema: {"passes":true|false,"novelty_score":0-5,"reason":"...","closest_match":"...","rewrite_hint":"..."}. '
-        . 'Pass only when the candidate is clearly different in angle from recent topics, not merely reworded.';
+        . 'Pass only when the candidate is clearly different in topic angle from ALL recent topics. '
+        . 'Reject if same subject with reworded title, same structure, same examples, or same core argument. '
+        . 'For Chinese posts, compare meaning not just characters.';
     $user = "Candidate title:\n{$candidateTitle}\n\nCandidate body:\n{$candidateRaw}\n\n"
         . "Recent topics from this worker:\n{$localLines}\n\n"
         . "Recent forum topics:\n{$forumHints}\n\n"
@@ -688,7 +666,7 @@ function casual_uniqueness_gate_with_llm(string $candidateTitle, string $candida
     $hint = trim((string)($obj['rewrite_hint'] ?? ''));
     return array(
         'ok' => true,
-        'passes' => $passes && $score >= 4.0,
+        'passes' => $passes && $score >= 4.2,
         'score' => $score,
         'reason' => $reason === '' ? 'no_reason' : $reason,
         'closest_match' => $closest,
@@ -1365,6 +1343,17 @@ $categoryId = casual_pick_category_id_for_lane($lane);
 $bot = casual_bot_for_category($categoryId, $bots);
 $soulPromptRun = konvo_soul_prompt_for_topic($bot);
 $soulRulesRun = konvo_soul_parse_topic_rules($soulPromptRun);
+$soulKeyRun = trim((string)($bot['soul_key'] ?? strtolower((string)($bot['username'] ?? ''))));
+$soulPathRun = __DIR__ . '/souls/' . konvo_normalize_soul_key($soulKeyRun) . '.SOUL.md';
+if (strlen(trim($soulPromptRun)) < 80) {
+    casual_out(500, array(
+        'ok' => false,
+        'error' => 'SOUL file missing or too short for this bot.',
+        'bot' => $bot,
+        'expected_soul_path' => $soulPathRun,
+        'hint' => 'Upload souls/*.SOUL.md to the server or save SOUL content in konvo_bot_admin.php.',
+    ));
+}
 $signatureSeed = strtolower((string)($bot['username'] ?? 'bai') . '|casual-topic|' . date('Y-m-d-H'));
 $signature = function_exists('konvo_signature_with_optional_emoji')
     ? konvo_signature_with_optional_emoji((string)($bot['name'] ?? 'BAI'), $signatureSeed)
@@ -1385,19 +1374,16 @@ if (!$dryRun && !$force && $dailyCap > 0) {
         ));
     }
 }
-$recentForumTitles = casual_fetch_latest_topic_titles(30);
+$recentForumTitles = casual_fetch_latest_topic_titles(100, $categoryId);
 
 $attempts = array();
 $generated = null;
-$bestFallback = null;
-$bestFallbackScore = -1.0;
 $extraAvoidance = '';
 $topicModeRun = !empty($soulRulesRun['longform']) ? 'soul_longform' : 'soul';
 $requestStartTs = isset($_SERVER['REQUEST_TIME_FLOAT']) ? (float)$_SERVER['REQUEST_TIME_FLOAT'] : microtime(true);
 $fastMode = (bool)KONVO_TOPIC_FAST_MODE;
-$maxAttempts = $fastMode ? 1 : 2;
-$requestBudget = !empty($soulRulesRun['longform']) ? 55.0 : 48.0;
-$skipUniquenessGate = $fastMode || !empty($soulRulesRun['longform']);
+$maxAttempts = $fastMode ? 3 : 4;
+$requestBudget = !empty($soulRulesRun['longform']) ? 65.0 : 55.0;
 
 for ($i = 0; $i < $maxAttempts; $i++) {
     if ((microtime(true) - $requestStartTs) > $requestBudget) {
@@ -1406,31 +1392,31 @@ for ($i = 0; $i < $maxAttempts; $i++) {
     $strict = $i > 0;
     $res = casual_generate_with_llm($bot, $signature, $recent, $recentForumTitles, $strict, $extraAvoidance, $lane, $categoryId);
     if (!empty($res['ok'])) {
-        $tooSimilar = casual_title_too_similar_to_recent((string)($res['title'] ?? ''), $recentForumTitles);
-        if ($tooSimilar) {
-            $res = array('ok' => false, 'error' => 'title too similar to recent forum topics', 'title' => (string)($res['title'] ?? ''));
+        $dup = casual_topic_too_similar(
+            (string)($res['title'] ?? ''),
+            (string)($res['raw'] ?? ''),
+            $recent,
+            $recentForumTitles
+        );
+        if (!empty($dup['duplicate'])) {
+            $res = array(
+                'ok' => false,
+                'error' => 'topic too similar to recent posts',
+                'duplicate' => $dup,
+                'title' => (string)($res['title'] ?? ''),
+            );
         }
     }
-    if (!empty($res['ok']) && !$skipUniquenessGate) {
+    if (!empty($res['ok'])) {
         $gate = casual_uniqueness_gate_with_llm((string)$res['title'], (string)$res['raw'], $recent, $recentForumTitles);
         $res['uniqueness_gate'] = $gate;
         if (!empty($gate['ok']) && empty($gate['passes'])) {
-            $score = (float)($gate['score'] ?? 0.0);
-            if ($score > $bestFallbackScore) {
-                $bestFallbackScore = $score;
-                $bestFallback = $res;
-            }
             $res = array(
                 'ok' => false,
                 'error' => 'uniqueness gate rejected candidate',
                 'gate' => $gate,
                 'title' => (string)($res['title'] ?? ''),
             );
-        } elseif (empty($gate['ok'])) {
-            if ($bestFallback === null) {
-                $bestFallback = $res;
-                $bestFallbackScore = 3.6;
-            }
         }
     }
     $attempts[] = $res;
@@ -1441,15 +1427,14 @@ for ($i = 0; $i < $maxAttempts; $i++) {
     $err = trim((string)($res['error'] ?? ''));
     $gateHint = is_array($res['gate'] ?? null) ? trim((string)($res['gate']['rewrite_hint'] ?? '')) : '';
     $closest = is_array($res['gate'] ?? null) ? trim((string)($res['gate']['closest_match'] ?? '')) : '';
+    if ($closest === '' && is_array($res['duplicate'] ?? null)) {
+        $closest = trim((string)($res['duplicate']['closest_title'] ?? ''));
+    }
     $pieces = array();
     if ($err !== '') $pieces[] = $err;
     if ($closest !== '') $pieces[] = 'Too close to: ' . $closest;
     if ($gateHint !== '') $pieces[] = 'Rewrite hint: ' . $gateHint;
     $extraAvoidance = implode(' ', $pieces);
-}
-
-if (!is_array($generated) && is_array($bestFallback) && $bestFallback !== array()) {
-    $generated = $bestFallback;
 }
 
 if (!is_array($generated) || empty($generated['ok'])) {
@@ -1464,8 +1449,23 @@ if (!is_array($generated) || empty($generated['ok'])) {
     }
     $template = casual_template_fallback($bot, $categoryId, $seedForFallback);
     if (!empty($template['ok'])) {
-        $generated = $template;
-        $attempts[] = array('ok' => true, 'fallback' => true, 'note' => 'used template fallback after LLM failure');
+        $dup = casual_topic_too_similar(
+            (string)($template['title'] ?? ''),
+            (string)($template['raw'] ?? ''),
+            $recent,
+            $recentForumTitles
+        );
+        if (empty($dup['duplicate'])) {
+            $generated = $template;
+            $attempts[] = array('ok' => true, 'fallback' => true, 'note' => 'used template fallback after LLM failure');
+        } else {
+            $attempts[] = array(
+                'ok' => false,
+                'fallback' => true,
+                'error' => 'template fallback rejected as duplicate',
+                'duplicate' => $dup,
+            );
+        }
     }
 }
 
@@ -1481,13 +1481,39 @@ if (!is_array($generated) || empty($generated['ok'])) {
         'attempt_count' => count($attempts),
         'fast_mode' => $fastMode,
         'elapsed_seconds' => round(microtime(true) - $requestStartTs, 2),
-        'hint' => 'Check LLM_API_KEY / DeepSeek quota. Set KONVO_TOPIC_FAST_MODE=0 to allow a second retry.',
+        'hint' => 'Check LLM_API_KEY / DeepSeek quota. Topic was rejected for duplicate/similar content or SOUL mismatch.',
     ));
 }
 
 $title = (string)$generated['title'];
 $raw = (string)$generated['raw'];
 $plan = isset($generated['plan']) && is_array($generated['plan']) ? $generated['plan'] : array();
+
+$finalDupCheck = casual_topic_too_similar($title, $raw, $recent, $recentForumTitles);
+if (!empty($finalDupCheck['duplicate'])) {
+    casual_out(500, array(
+        'ok' => false,
+        'error' => 'Final duplicate check blocked post.',
+        'duplicate' => $finalDupCheck,
+        'title_preview' => $title,
+        'recent_forum_count' => count($recentForumTitles),
+        'recent_local_count' => count($recent),
+    ));
+}
+
+$finalSoulCheck = konvo_soul_validate_topic($title, $raw, $soulRulesRun, false);
+if (empty($finalSoulCheck['ok'])) {
+    casual_out(500, array(
+        'ok' => false,
+        'error' => 'Generated topic failed final SOUL validation; post blocked.',
+        'validation' => $finalSoulCheck,
+        'han_chars' => konvo_soul_count_han_chars($raw),
+        'used_fallback' => !empty($generated['fallback']),
+        'soul_rules' => $soulRulesRun,
+        'title_preview' => $title,
+    ));
+}
+
 $categoryDecision = array(
     'ok' => true,
     'category_key' => 'registry',
@@ -1516,6 +1542,7 @@ if ($dryRun) {
         'topic' => array(
             'title' => $title,
             'category_id' => $categoryId,
+            'han_chars' => konvo_soul_count_han_chars($raw),
             'raw_preview' => $raw,
             'gaming_detected' => $gamingDetected,
             'category_decision' => $categoryDecision,
