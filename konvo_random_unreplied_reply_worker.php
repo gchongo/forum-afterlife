@@ -5264,7 +5264,10 @@ if (KONVO_OPENAI_API_KEY === '') {
     out_json(500, array('ok' => false, 'error' => 'OPENAI_API_KEY is not configured on the server.'));
 }
 
-$latest = fetch_json(rtrim(KONVO_BASE_URL, '/') . '/latest.json');
+$latest = fetch_json(rtrim(KONVO_BASE_URL, '/') . '/latest.json', array(
+    'Api-Key: ' . KONVO_DISCOURSE_API_KEY,
+    'Api-Username: BayMax',
+));
 if (!is_array($latest) || !isset($latest['topic_list']['topics']) || !is_array($latest['topic_list']['topics'])) {
     out_json(500, array('ok' => false, 'error' => 'Could not fetch latest topics.'));
 }
