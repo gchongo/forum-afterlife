@@ -10,6 +10,9 @@
 
 declare(strict_types=1);
 
+@set_time_limit(120);
+@ignore_user_abort(true);
+
 header('Content-Type: application/json; charset=utf-8');
 
 require_once __DIR__ . '/konvo_soul_helper.php';
@@ -32,6 +35,14 @@ if (!function_exists('konvo_model_for_task')) {
 
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
+if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
+    $discourseApiUser = trim((string)getenv('KONVO_DISCOURSE_API_USERNAME'));
+    define('KONVO_DISCOURSE_API_USERNAME', $discourseApiUser !== '' ? $discourseApiUser : 'system');
+}
+if (!defined('KONVO_TOPIC_FAST_MODE')) {
+    $fastModeEnv = strtolower(trim((string)getenv('KONVO_TOPIC_FAST_MODE')));
+    define('KONVO_TOPIC_FAST_MODE', ($fastModeEnv === '' || in_array($fastModeEnv, array('1', 'true', 'yes', 'on'), true)));
+}
 if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((string)(getenv('LLM_API_KEY') ?: getenv('DEEPSEEK_API_KEY') ?: getenv('OPENAI_API_KEY'))));
 if (!defined('KONVO_LLM_CHAT_COMPLETIONS_URL')) define('KONVO_LLM_CHAT_COMPLETIONS_URL', rtrim((string)(getenv('LLM_API_BASE_URL') ?: getenv('OPENAI_API_BASE') ?: 'https://api.deepseek.com'), '/') . '/chat/completions');
 if (!defined('KONVO_SECRET')) define('KONVO_SECRET', trim((string)getenv('DISCOURSE_WEBHOOK_SECRET')));
@@ -455,21 +466,22 @@ function casual_lane_from_key(string $key, array $recent = array()): ?array
     );
 }
 
-function casual_fetch_latest_topic_titles(int $max = 120): array
+function casual_fetch_latest_topic_titles(int $max = 30): array
 {
     if (!function_exists('curl_init')) return array();
     $titles = array();
     $page = 0;
-    $maxPages = 6;
+    $maxPages = min(2, max(1, (int)ceil($max / 30)));
     while ($page < $maxPages && count($titles) < $max) {
         $url = rtrim(KONVO_BASE_URL, '/') . '/latest.json?order=created&ascending=false&page=' . $page;
         $ch = curl_init($url);
         curl_setopt_array($ch, array(
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 15,
+            CURLOPT_TIMEOUT => 8,
+            CURLOPT_CONNECTTIMEOUT => 4,
             CURLOPT_HTTPHEADER => array(
                 'Api-Key: ' . KONVO_API_KEY,
-                'Api-Username: system',
+                'Api-Username: ' . KONVO_DISCOURSE_API_USERNAME,
             ),
         ));
         $body = curl_exec($ch);
@@ -967,7 +979,7 @@ function casual_looks_too_technical(string $text): bool
     return (bool)preg_match('/\b(javascript|typescript|css|html|react|vue|angular|api endpoint|database schema|backend|frontend|docker|kubernetes|ci\/cd|compiler|runtime|stack trace|queryselector|npm|package\.json|php warning|sql query)\b/i', $t);
 }
 
-function casual_validate_generated_topic(string $title, string $raw, bool $historyMode = false): array
+function casual_validate_generated_topic(string $title, string $raw, bool $historyMode = false, bool $relaxed = false): array
 {
     $title = trim($title);
     $raw = trim($raw);
@@ -978,7 +990,7 @@ function casual_validate_generated_topic(string $title, string $raw, bool $histo
     if (strlen($title) > ($historyMode ? 120 : 88)) {
         return array('ok' => false, 'error' => 'title too long');
     }
-    if ($raw === '' || strlen($raw) < ($historyMode ? 300 : 40)) {
+    if ($raw === '' || strlen($raw) < ($historyMode ? 200 : 40)) {
         return array('ok' => false, 'error' => 'body too short');
     }
     if (strlen($raw) > ($historyMode ? 3800 : 2200)) {
@@ -991,16 +1003,19 @@ function casual_validate_generated_topic(string $title, string $raw, bool $histo
         if (!casual_is_chinese_like($title . "\n" . $raw)) {
             return array('ok' => false, 'error' => 'history mode requires Chinese output');
         }
-        if (casual_count_han_chars($raw) < 500) {
-            return array('ok' => false, 'error' => 'history mode body must be at least 500 Chinese chars');
+        $minHan = $relaxed ? 300 : 500;
+        if (casual_count_han_chars($raw) < $minHan) {
+            return array('ok' => false, 'error' => 'history mode body must be at least ' . $minHan . ' Chinese chars');
         }
         $paraCount = preg_match_all('/\n\s*\n/u', $raw, $m);
         $blocks = (is_int($paraCount) ? $paraCount : 0) + 1;
-        if ($blocks < 3 || $blocks > 6) {
-            return array('ok' => false, 'error' => 'history mode needs 3-6 paragraphs');
+        $minBlocks = $relaxed ? 2 : 3;
+        $maxBlocks = 6;
+        if ($blocks < $minBlocks || $blocks > $maxBlocks) {
+            return array('ok' => false, 'error' => 'history mode needs ' . $minBlocks . '-' . $maxBlocks . ' paragraphs');
         }
     } else {
-        if (strlen($raw) < 80) {
+        if (strlen($raw) < ($relaxed ? 60 : 80)) {
             return array('ok' => false, 'error' => 'body too short for meaningful discussion');
         }
     }
@@ -1029,7 +1044,15 @@ function casual_extract_json_object(string $content): array
     return is_array($decoded) ? $decoded : array();
 }
 
-function casual_openai_json(array $payload): array
+function casual_llm_timeout_seconds(bool $historyMode = false): int
+{
+    if ((bool)KONVO_TOPIC_FAST_MODE) {
+        return $historyMode ? 45 : 28;
+    }
+    return $historyMode ? 35 : 22;
+}
+
+function casual_openai_json(array $payload, bool $historyMode = false): array
 {
     if (!function_exists('curl_init')) {
         return array('ok' => false, 'status' => 0, 'error' => 'curl_init unavailable', 'json' => array(), 'raw' => '');
@@ -1039,7 +1062,8 @@ function casual_openai_json(array $payload): array
     curl_setopt_array($ch, array(
         CURLOPT_POST => true,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT => 18,
+        CURLOPT_CONNECTTIMEOUT => 8,
+        CURLOPT_TIMEOUT => casual_llm_timeout_seconds($historyMode),
         CURLOPT_HTTPHEADER => array(
             'Content-Type: application/json',
             'Authorization: Bearer ' . KONVO_OPENAI_API_KEY,
@@ -1314,7 +1338,7 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
         'temperature' => 0.9,
     );
 
-    $res = casual_openai_json($payload);
+    $res = casual_openai_json($payload, $historyMode);
     if (!$res['ok']) {
         return array('ok' => false, 'error' => 'OpenAI request failed', 'detail' => $res['error'], 'status' => $res['status']);
     }
@@ -1341,7 +1365,7 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
         return array('ok' => false, 'error' => 'Model JSON missing title/raw', 'parsed' => $obj);
     }
 
-    $valid = casual_validate_generated_topic($title, $raw, $historyMode);
+    $valid = casual_validate_generated_topic($title, $raw, $historyMode, $strict);
     if (!$valid['ok']) {
         return array('ok' => false, 'error' => (string)($valid['error'] ?? 'validation failed'), 'title' => $title, 'raw' => $raw);
     }
@@ -1357,6 +1381,74 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
             'lane' => $planLane,
             'seed_topic' => $seedTopic,
         ),
+    );
+}
+
+function casual_template_fallback(array $bot, int $categoryId, string $seedTopic = ''): array
+{
+    $historyMode = casual_is_history_mode($bot, $categoryId);
+    $seed = trim($seedTopic);
+    if ($seed === '') {
+        $seed = $historyMode
+            ? casual_pick_random_seed_topic(array(), array(), casual_history_seed_topic_pool())
+            : casual_pick_random_seed_topic(array(), array(), casual_seed_topic_pool());
+    }
+
+    if ($historyMode) {
+        $title = $seed;
+        $raw = $seed . "是一个值得从制度、财政与社会结构多个层面重新讨论的问题。\n\n"
+            . "从史料来看，我们往往更容易记住事件本身，却忽略了背后长期运行的治理逻辑。"
+            . "比如政策设计时的约束条件、执行链条中的地方差异，以及不同群体在其中的实际处境，"
+            . "这些细节常常决定了一个制度能否在较长时期内维持稳定。\n\n"
+            . "如果把它放到更大的历史脉络里观察，会发现许多表面上的“偶然结果”，"
+            . "其实都对应着更深层的结构性因素。"
+            . "财政压力、军事需求、交通与信息条件、地方精英与国家权力的互动，"
+            . "都会在不同阶段以不同方式显现。\n\n"
+            . "因此，讨论这类主题时，关键不只是复述结论，而是比较不同解释路径："
+            . "哪些变量最可能改变结果？哪些证据仍然不足？哪些常见说法可能过于简化？\n\n"
+            . "想听听大家的看法：在你熟悉的相关研究或阅读中，"
+            . "哪些细节最让你重新理解了这一问题的复杂性？"
+            . "如果要从一个被忽视的角度切入，你会优先讨论什么？";
+
+        if (casual_count_han_chars($raw) < 500) {
+            $raw .= "\n\n另外，也欢迎补充不同朝代或不同地区之间的对照案例，"
+                . "看看同一套制度逻辑在不同条件下为何会产生不同后果。";
+        }
+
+        return array(
+            'ok' => true,
+            'title' => $title,
+            'raw' => $raw,
+            'plan' => array(
+                'mood' => 'reflective',
+                'angle' => 'structural reinterpretation',
+                'posting_intent' => 'template_fallback',
+                'lane' => 'history',
+                'seed_topic' => $seed,
+            ),
+            'fallback' => true,
+        );
+    }
+
+    $botName = trim((string)($bot['name'] ?? 'BAI'));
+    $title = '关于「' . $seed . '」，大家最近有什么新想法？';
+    $raw = "最近在浏览论坛时，我又想到「{$seed}」这个话题。\n\n"
+        . "有时候同一个问题，不同人的经历会给出完全不同的答案。"
+        . "我很好奇大家现在是更倾向保守一点，还是愿意尝试一些新做法？\n\n"
+        . "如果方便的话，可以分享一个具体例子：你遇到过什么情况，最后是怎么处理的？";
+
+    return array(
+        'ok' => true,
+        'title' => $title,
+        'raw' => $raw,
+        'plan' => array(
+            'mood' => 'curious',
+            'angle' => 'community prompt',
+            'posting_intent' => 'template_fallback',
+            'lane' => 'chat',
+            'seed_topic' => $seed,
+        ),
+        'fallback' => true,
     );
 }
 
@@ -1468,7 +1560,7 @@ if (!$dryRun && !$force) {
         ));
     }
 }
-$recentForumTitles = casual_fetch_latest_topic_titles(120);
+$recentForumTitles = casual_fetch_latest_topic_titles(30);
 
 $attempts = array();
 $generated = null;
@@ -1477,8 +1569,13 @@ $bestFallbackScore = -1.0;
 $extraAvoidance = '';
 $historyModeRun = casual_is_history_mode($bot, $categoryId);
 $requestStartTs = isset($_SERVER['REQUEST_TIME_FLOAT']) ? (float)$_SERVER['REQUEST_TIME_FLOAT'] : microtime(true);
-for ($i = 0; $i < 2; $i++) {
-    if ((microtime(true) - $requestStartTs) > 20.0) {
+$fastMode = (bool)KONVO_TOPIC_FAST_MODE;
+$maxAttempts = $fastMode ? 1 : 2;
+$requestBudget = $fastMode ? 55.0 : 48.0;
+$skipUniquenessGate = $fastMode || $historyModeRun;
+
+for ($i = 0; $i < $maxAttempts; $i++) {
+    if ((microtime(true) - $requestStartTs) > $requestBudget) {
         break;
     }
     $strict = $i > 0;
@@ -1489,7 +1586,7 @@ for ($i = 0; $i < 2; $i++) {
             $res = array('ok' => false, 'error' => 'title too similar to recent forum topics', 'title' => (string)($res['title'] ?? ''));
         }
     }
-    if (!empty($res['ok']) && !$historyModeRun) {
+    if (!empty($res['ok']) && !$skipUniquenessGate) {
         $gate = casual_uniqueness_gate_with_llm((string)$res['title'], (string)$res['raw'], $recent, $recentForumTitles);
         $res['uniqueness_gate'] = $gate;
         if (!empty($gate['ok']) && empty($gate['passes'])) {
@@ -1505,7 +1602,6 @@ for ($i = 0; $i < 2; $i++) {
                 'title' => (string)($res['title'] ?? ''),
             );
         } elseif (empty($gate['ok'])) {
-            // If novelty gate itself fails, keep best generated draft so we don't hard-fail.
             if ($bestFallback === null) {
                 $bestFallback = $res;
                 $bestFallbackScore = 3.6;
@@ -1532,14 +1628,35 @@ if (!is_array($generated) && is_array($bestFallback) && $bestFallback !== array(
 }
 
 if (!is_array($generated) || empty($generated['ok'])) {
+    $seedForFallback = '';
+    foreach ($attempts as $a) {
+        if (!is_array($a)) continue;
+        $plan = $a['plan'] ?? null;
+        if (is_array($plan) && trim((string)($plan['seed_topic'] ?? '')) !== '') {
+            $seedForFallback = trim((string)$plan['seed_topic']);
+            break;
+        }
+    }
+    $template = casual_template_fallback($bot, $categoryId, $seedForFallback);
+    if (!empty($template['ok'])) {
+        $generated = $template;
+        $attempts[] = array('ok' => true, 'fallback' => true, 'note' => 'used template fallback after LLM failure');
+    }
+}
+
+if (!is_array($generated) || empty($generated['ok'])) {
     $errors = array();
     foreach ($attempts as $a) {
         $errors[] = isset($a['error']) ? (string)$a['error'] : 'unknown generation failure';
     }
-    casual_out(502, array(
+    casual_out(500, array(
         'ok' => false,
         'error' => 'Failed to generate casual topic with model.',
         'attempt_errors' => $errors,
+        'attempt_count' => count($attempts),
+        'fast_mode' => $fastMode,
+        'elapsed_seconds' => round(microtime(true) - $requestStartTs, 2),
+        'hint' => 'Check LLM_API_KEY / DeepSeek quota. Set KONVO_TOPIC_FAST_MODE=0 to allow a second retry.',
     ));
 }
 
@@ -1566,6 +1683,8 @@ if ($dryRun) {
         'post_as' => (string)($bot['username'] ?? ''),
         'plan' => $plan,
         'lane' => $lane,
+        'used_fallback' => !empty($generated['fallback']),
+        'fast_mode' => $fastMode,
         'topic' => array(
             'title' => $title,
             'category_id' => $categoryId,
@@ -1609,6 +1728,8 @@ casual_out(200, array(
     'post_as' => (string)($post['post_as'] ?? ''),
     'plan' => $plan,
     'lane' => $lane,
+    'used_fallback' => !empty($generated['fallback']),
+    'fast_mode' => $fastMode,
     'topic' => array(
         'title' => $title,
         'category_id' => $categoryId,

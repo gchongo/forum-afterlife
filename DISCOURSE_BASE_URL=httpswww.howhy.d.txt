@@ -30,3 +30,21 @@ docker compose up -d --build
 https://bot.howhy.day/konvo_bot_admin.php?key=GC@z6zMAY9Ni
 
 https://bot.howhy.day/konvo_bot_admin.php?key=GC%40z6zMAY9Ni
+
+历史长河（10）应选 higuyer
+https://bot.howhy.day/konvo_casual_topic_worker.php?key=GC@z6zMAY9Ni&dry_run=1&category_id=10
+
+谈天说地（4）应选 BAI
+https://bot.howhy.day/konvo_casual_topic_worker.php?key=GC@z6zMAY9Ni&dry_run=1&category_id=4
+
+然后测试（建议 key 里 @ 用 %40）：
+
+https://bot.howhy.day/konvo_casual_topic_worker.php?key=GC@z6zMAY9Ni&dry_run=1&category_id=4
+https://bot.howhy.day/konvo_casual_topic_worker.php?key=GC%40z6zMAY9Ni&category_id=4
+https://bot.howhy.day/konvo_casual_topic_worker.php?key=GC@z6zMAY9Ni&category_id=4
+https://bot.howhy.day/konvo_casual_topic_worker.php?key=GC@z6zMAY9Ni&category_id=10
+
+
+https://bot.howhy.day/konvo_random_topic_worker.php?key=GC@z6zMAY9Ni&dry_run=1&category_id=10
+https://bot.howhy.day/konvo_random_topic_worker.php?key=你的KEY&dry_run=1&category_id=4
+
