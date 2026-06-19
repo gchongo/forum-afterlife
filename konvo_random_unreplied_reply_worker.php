@@ -15,6 +15,7 @@ header('Content-Type: application/json; charset=utf-8');
 require_once __DIR__ . '/konvo_soul_helper.php';
 require_once __DIR__ . '/konvo_signature_helper.php';
 require_once __DIR__ . '/kirupa_article_helper.php';
+require_once __DIR__ . '/konvo_bot_registry.php';
 $konvoForumPromptHelper = __DIR__ . '/konvo_forum_prompt_helper.php';
 if (is_file($konvoForumPromptHelper)) {
     require_once $konvoForumPromptHelper;
@@ -42,10 +43,14 @@ function worker_model_for_task($task, $ctx = array())
     return konvo_model_for_task((string)$task, is_array($ctx) ? $ctx : array());
 }
 
-$bots = array(
-    array('username' => 'higuyer', 'signature' => 'higuyer', 'soul_key' => 'higuyer'),
-    array('username' => 'BAI', 'signature' => 'BAI', 'soul_key' => 'bai'),
-);
+$bots = array_values(array_map(static function (array $row): array {
+    $name = trim((string)($row['name'] ?? $row['username'] ?? ''));
+    return array(
+        'username' => (string)($row['username'] ?? ''),
+        'signature' => $name !== '' ? $name : (string)($row['username'] ?? ''),
+        'soul_key' => (string)($row['soul_key'] ?? ''),
+    );
+}, konvo_bot_registry_enabled()));
 
 function out_json($code, $data)
 {
@@ -362,9 +367,20 @@ function worker_consensus_mark_posted_reply(&$consensusState, $topicId, $botUser
 
 function worker_all_bot_signature_aliases()
 {
-    return array(
-        'higuyer', 'Higuyer', 'bai', 'BAI',
-    );
+    $aliases = array();
+    foreach (konvo_bot_registry_enabled() as $row) {
+        $u = trim((string)($row['username'] ?? ''));
+        $n = trim((string)($row['name'] ?? ''));
+        if ($u !== '') {
+            $aliases[] = $u;
+            $aliases[] = strtolower($u);
+            $aliases[] = strtoupper($u);
+        }
+        if ($n !== '') {
+            $aliases[] = $n;
+        }
+    }
+    return array_values(array_unique(array_filter($aliases, static fn($v) => trim((string)$v) !== '')));
 }
 
 function worker_question_cadence_state_path()
@@ -853,7 +869,9 @@ function worker_is_known_bot_username($username)
 {
     static $botSet = null;
     if ($botSet === null) {
-        $bots = array('higuyer', 'bai');
+        $bots = array_values(array_map(static function (array $row): string {
+            return strtolower(trim((string)($row['username'] ?? '')));
+        }, konvo_bot_registry_enabled()));
         $botSet = array_fill_keys($bots, true);
     }
     $u = strtolower(trim((string)$username));
@@ -2469,8 +2487,12 @@ function post_content_text($post)
 function is_bot_user($username)
 {
     $u = strtolower(trim((string)$username));
-    $botUsers = array('higuyer', 'bai');
-    return in_array($u, $botUsers, true);
+    foreach (konvo_bot_registry_enabled() as $row) {
+        if ($u === strtolower(trim((string)($row['username'] ?? '')))) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function worker_recent_other_bot_posts($posts, $currentBotUsername, $limit = 4)
@@ -2879,7 +2901,9 @@ function worker_strip_foreign_bot_name_noise($text, $currentBotUsername)
     $txt = trim((string)$text);
     if ($txt === '') return $txt;
 
-    $aliases = array('higuyer', 'bai');
+    $aliases = array_values(array_map(static function (array $row): string {
+        return strtolower(trim((string)($row['username'] ?? '')));
+    }, konvo_bot_registry_enabled()));
     $current = strtolower(trim((string)$currentBotUsername));
     $aliases = array_values(array_filter($aliases, static function ($a) use ($current) {
         $name = strtolower(trim((string)$a));

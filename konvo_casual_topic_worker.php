@@ -14,6 +14,7 @@ header('Content-Type: application/json; charset=utf-8');
 
 require_once __DIR__ . '/konvo_soul_helper.php';
 require_once __DIR__ . '/konvo_signature_helper.php';
+require_once __DIR__ . '/konvo_bot_registry.php';
 $konvoForumPromptHelper = __DIR__ . '/konvo_forum_prompt_helper.php';
 if (is_file($konvoForumPromptHelper)) {
     require_once $konvoForumPromptHelper;
@@ -43,10 +44,7 @@ if (!defined('KONVO_WEBDEV_CATEGORY_ID')) define('KONVO_WEBDEV_CATEGORY_ID', (in
 if (!defined('KONVO_GAMING_CATEGORY_ID')) define('KONVO_GAMING_CATEGORY_ID', (int)KONVO_HISTORY_CATEGORY_ID);
 if (!defined('KONVO_DESIGN_CATEGORY_ID')) define('KONVO_DESIGN_CATEGORY_ID', (int)KONVO_HISTORY_CATEGORY_ID);
 
-$bots = array(
-    array('username' => 'higuyer', 'name' => 'higuyer', 'soul_key' => 'higuyer', 'soul_fallback' => 'You are higuyer. Reflective, history-aware, and conversational.'),
-    array('username' => 'BAI', 'name' => 'BAI', 'soul_key' => 'bai', 'soul_fallback' => 'You are BAI. Friendly, social, and concise.'),
-);
+$bots = konvo_bot_registry_enabled();
 
 function casual_out(int $status, array $data): void
 {
@@ -701,6 +699,11 @@ function casual_find_bot(array $bots, string $username): ?array
 
 function casual_pick_category_id_for_lane(array $lane): int
 {
+    $forcedCategoryId = (int)($_GET['category_id'] ?? 0);
+    if ($forcedCategoryId > 0) {
+        return $forcedCategoryId;
+    }
+
     $forced = strtolower(trim((string)($_GET['category'] ?? '')));
     if ($forced === 'history' || $forced === 'historical' || $forced === 'history_long_river') {
         return (int)KONVO_HISTORY_CATEGORY_ID;
@@ -710,16 +713,23 @@ function casual_pick_category_id_for_lane(array $lane): int
     }
 
     $laneKey = strtolower(trim((string)($lane['key'] ?? '')));
-    if (in_array($laneKey, array('sci_fi_ai', 'games'), true)) {
+    if (in_array($laneKey, array('sci_fi_ai', 'games'), true) && konvo_bot_registry_pick_for_category((int)KONVO_HISTORY_CATEGORY_ID) !== null) {
         return (int)KONVO_HISTORY_CATEGORY_ID;
+    }
+    $defaultBot = konvo_bot_registry_pick_for_category((int)KONVO_CHAT_CATEGORY_ID);
+    if (is_array($defaultBot)) {
+        return (int)KONVO_CHAT_CATEGORY_ID;
+    }
+    $enabled = konvo_bot_registry_enabled();
+    if (is_array($enabled[0] ?? null)) {
+        return (int)($enabled[0]['category_id'] ?? KONVO_CHAT_CATEGORY_ID);
     }
     return (int)KONVO_CHAT_CATEGORY_ID;
 }
 
 function casual_bot_for_category(int $categoryId, array $bots): array
 {
-    $targetUsername = $categoryId === (int)KONVO_HISTORY_CATEGORY_ID ? 'higuyer' : 'bai';
-    $picked = casual_find_bot($bots, $targetUsername);
+    $picked = konvo_bot_registry_pick_for_category($categoryId);
     if (is_array($picked)) {
         return $picked;
     }

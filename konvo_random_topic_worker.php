@@ -53,6 +53,7 @@ register_shutdown_function(static function (): void {
 
 require_once __DIR__ . '/konvo_soul_helper.php';
 require_once __DIR__ . '/konvo_signature_helper.php';
+require_once __DIR__ . '/konvo_bot_registry.php';
 $konvoForumPromptHelper = __DIR__ . '/konvo_forum_prompt_helper.php';
 if (is_file($konvoForumPromptHelper)) {
     require_once $konvoForumPromptHelper;
@@ -93,10 +94,7 @@ function konvo_random_topic_fast_mode()
     return false;
 }
 
-$bots = array(
-    array('username' => 'higuyer', 'name' => 'higuyer', 'soul_key' => 'higuyer', 'soul_fallback' => 'You are higuyer. Reflective, history-aware, and conversational.'),
-    array('username' => 'BAI', 'name' => 'BAI', 'soul_key' => 'bai', 'soul_fallback' => 'You are BAI. Friendly, social, and concise.'),
-);
+$bots = konvo_bot_registry_enabled();
 
 $feed_sources = array(
     array('site' => 'daily.dev', 'feed' => 'https://daily.dev/blog/rss.xml', 'kind' => 'technology'),
@@ -2311,12 +2309,11 @@ function find_bot_by_username($bots, $username)
 
 function bot_for_category_id($bots, int $categoryId)
 {
-    $targetUsername = ($categoryId === (int)KONVO_HISTORY_CATEGORY_ID) ? 'higuyer' : 'bai';
-    $picked = find_bot_by_username($bots, $targetUsername);
+    $picked = konvo_bot_registry_pick_for_category($categoryId);
     if (is_array($picked)) {
         return $picked;
     }
-    return is_array($bots[0] ?? null) ? $bots[0] : array('username' => 'BAI', 'name' => 'BAI', 'soul_key' => 'bai');
+    return is_array($bots[0] ?? null) ? $bots[0] : array('username' => 'system', 'name' => 'system', 'soul_key' => 'system');
 }
 
 $providedKey = isset($_GET['key']) ? (string)$_GET['key'] : (isset($_POST['key']) ? (string)$_POST['key'] : '');

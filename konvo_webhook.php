@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 header('Content-Type: application/json; charset=utf-8');
 
+require_once __DIR__ . '/konvo_bot_registry.php';
+
 function jsonOut(array $data, int $status = 200): void
 {
     http_response_code($status);
@@ -428,7 +430,10 @@ if ($postId <= 0 || $topicId <= 0) {
     jsonOut(['ok' => false, 'error' => 'Missing post/topic id.'], 400);
 }
 
-$trackedBots = ['higuyer', 'bai'];
+$registeredBots = konvo_bot_registry_enabled();
+$trackedBots = array_values(array_map(static function (array $b): string {
+    return strtolower(trim((string)($b['username'] ?? '')));
+}, $registeredBots));
 $isTrackedBotAuthor = in_array($author, $trackedBots, true);
 if ($isTrackedBotAuthor) {
     jsonOut(['ok' => true, 'ignored' => true, 'reason' => 'Author is a bot.']);
@@ -442,10 +447,14 @@ if (alreadyProcessedKey($dedupeKey)) {
 }
 
 $mentions = extractMentions($payload, $raw);
-$botEndpointMap = [
-    'higuyer' => 'konvo_higuyer_reply.php',
-    'bai' => 'konvo_bai_reply.php',
-];
+$botEndpointMap = [];
+foreach ($registeredBots as $bot) {
+    $u = strtolower(trim((string)($bot['username'] ?? '')));
+    if ($u === '') {
+        continue;
+    }
+    $botEndpointMap[$u] = 'konvo_dynamic_reply.php';
+}
 
 if (false && $isTrackedBotAuthor && $author !== 'kirupabot') {
     $categoryId = (int)($post['category_id'] ?? ($payload['category_id'] ?? 0));
@@ -558,6 +567,7 @@ foreach ($toTrigger as $bot => $script) {
         'target_post_number' => (string)$postNumber,
         'target_username' => (string)($post['username'] ?? ''),
         'target_raw' => (string)$raw,
+        'bot_username' => (string)$bot,
     ];
     if ($replyBot !== '' && $bot === $replyBot) {
         $fields['direct_reply_to_bot'] = '1';
