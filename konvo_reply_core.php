@@ -11,7 +11,19 @@ if (is_file($konvoModelRouter)) {
 if (!function_exists('konvo_model_for_task')) {
     function konvo_model_for_task(string $task, array $ctx = array()): string
     {
-        return 'gpt-5.4';
+        return 'deepseek-chat';
+    }
+}
+
+if (!function_exists('konvo_chat_completions_url')) {
+    function konvo_chat_completions_url(): string
+    {
+        $base = trim((string)(getenv('LLM_API_BASE_URL') ?: getenv('OPENAI_API_BASE') ?: 'https://api.deepseek.com'));
+        $base = rtrim($base, '/');
+        if ($base === '') {
+            $base = 'https://api.deepseek.com';
+        }
+        return $base . '/chat/completions';
     }
 }
 
@@ -150,7 +162,7 @@ function konvo_emergency_safe_reply_with_llm(
     }
     $model = trim($modelName);
     if ($model === '') {
-        $model = 'gpt-5.4-mini';
+        $model = 'deepseek-chat';
     }
     $payload = [
         'model' => $model,
@@ -197,6 +209,9 @@ function konvo_call_api(string $url, array $headers, ?array $payload = null, str
 {
     if (!function_exists('curl_init')) {
         return ['ok' => false, 'status' => 0, 'error' => 'curl_init unavailable'];
+    }
+    if ($url === 'https://api.openai.com/v1/chat/completions') {
+        $url = konvo_chat_completions_url();
     }
     $ch = curl_init($url);
     $opts = [
@@ -539,8 +554,8 @@ function konvo_low_effort_reaction_for_bot(
     if ($openAiApiKey !== '') {
         $model = function_exists('konvo_model_for_task')
             ? (string)konvo_model_for_task('low_effort_reaction', ['technical' => false])
-            : 'gpt-5.4-mini';
-        if ($model === '') $model = 'gpt-5.4-mini';
+            : 'deepseek-chat';
+        if ($model === '') $model = 'deepseek-chat';
         $payload = [
             'model' => $model,
             'messages' => [
@@ -1288,7 +1303,7 @@ function konvo_kirupabot_generate_keywords_with_llm(
         return [];
     }
     $payload = [
-        'model' => $modelName !== '' ? $modelName : 'gpt-5.4-mini',
+        'model' => $modelName !== '' ? $modelName : 'deepseek-chat',
         'messages' => [
             [
                 'role' => 'system',
@@ -1425,7 +1440,7 @@ function konvo_kirupabot_generate_common_themes_with_llm(
         return $fallback;
     }
     $payload = [
-        'model' => $modelName !== '' ? $modelName : 'gpt-5.4-mini',
+        'model' => $modelName !== '' ? $modelName : 'deepseek-chat',
         'messages' => [
             [
                 'role' => 'system',
@@ -1662,7 +1677,7 @@ function konvo_kirupabot_filter_resources_with_llm(
         $listLines[] = $row['idx'] . ') ' . $row['title'] . ' | ' . $row['url'];
     }
     $payload = [
-        'model' => $modelName !== '' ? $modelName : 'gpt-5.4-mini',
+        'model' => $modelName !== '' ? $modelName : 'deepseek-chat',
         'messages' => [
             [
                 'role' => 'system',
@@ -7072,7 +7087,7 @@ function konvo_pick_poll_option_with_llm(
         return ['ok' => false, 'error' => 'No poll options available.'];
     }
     if ($openAiApiKey === '') {
-        return ['ok' => false, 'error' => 'OPENAI_API_KEY missing.'];
+        return ['ok' => false, 'error' => 'LLM API key missing.'];
     }
 
     $list = [];
@@ -7544,7 +7559,7 @@ function konvo_quality_gate_evaluate_reply(
     bool $requiresFollowThrough
 ): array {
     if ($openAiApiKey === '') {
-        return ['ok' => false, 'error' => 'OPENAI_API_KEY missing'];
+        return ['ok' => false, 'error' => 'LLM API key missing'];
     }
     $modeRule = 'General mode: keep it concise, human, and directly relevant.';
     if ($isSimpleClarification) {
@@ -8097,14 +8112,14 @@ function konvo_run_reply(array $cfg): void
         konvo_json_out(['ok' => false, 'error' => 'Valid topic_id is required.'], 400);
     }
 
-    $baseUrl = trim((string)(getenv('DISCOURSE_BASE_URL') ?: 'https://forum.kirupa.com'));
+    $baseUrl = trim((string)(getenv('DISCOURSE_BASE_URL') ?: 'https://www.howhy.day'));
     $discourseApiKey = trim((string)getenv('DISCOURSE_API_KEY'));
-    $openAiApiKey = trim((string)getenv('OPENAI_API_KEY'));
+    $openAiApiKey = trim((string)(getenv('LLM_API_KEY') ?: getenv('DEEPSEEK_API_KEY') ?: getenv('OPENAI_API_KEY')));
     if ($discourseApiKey === '') {
         konvo_json_out(['ok' => false, 'error' => 'DISCOURSE_API_KEY is not configured on the server.'], 500);
     }
     if ($openAiApiKey === '') {
-        konvo_json_out(['ok' => false, 'error' => 'OPENAI_API_KEY is not configured on the server.'], 500);
+        konvo_json_out(['ok' => false, 'error' => 'LLM API key is not configured on the server.'], 500);
     }
 
     $botUsername = (string)$cfg['bot_username'];
@@ -8182,7 +8197,7 @@ function konvo_run_reply(array $cfg): void
         );
         $safeReplyText = konvo_emergency_safe_reply_with_llm(
             $openAiApiKey,
-            $safeModel !== '' ? $safeModel : 'gpt-5.4-mini',
+            $safeModel !== '' ? $safeModel : 'deepseek-chat',
             $safeSoulPrompt,
             $personaFactsLine,
             $title,

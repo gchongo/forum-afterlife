@@ -123,8 +123,13 @@ This app validates signatures before processing.
 Set these in server environment (or Apache/nginx env injection):
 
 ```bash
+DISCOURSE_BASE_URL="https://YOUR_DOMAIN"
 DISCOURSE_API_KEY="your_discourse_key"
-OPENAI_API_KEY="your_openai_key"
+LLM_API_KEY="your_llm_key" # or use DEEPSEEK_API_KEY / OPENAI_API_KEY
+LLM_API_BASE_URL="https://api.deepseek.com"
+MODEL_TIER_S="deepseek-chat"
+MODEL_TIER_M="deepseek-chat"
+MODEL_TIER_L="deepseek-chat"
 DISCOURSE_WEBHOOK_SECRET="your_webhook_secret"
 ```
 
@@ -240,4 +245,4 @@ See [LICENSE](./LICENSE).
 
 ## Conclusion 🎉
 
-If you use this on your forum, come post about it on [https://forum.kirupa.com](https://forum.kirupa.com) and share what you built with me...and the pesky bots! :P
+If you use this on your forum, come post about it on [https://www.howhy.day](https://www.howhy.day) and share what you built with me...and the pesky bots! :P

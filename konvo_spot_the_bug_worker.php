@@ -4,8 +4,8 @@
  * Browser-callable spot-the-bug topic poster.
  *
  * Example:
- * https://www.kirupa.com/konvo_spot_the_bug_worker.php?key=YOUR_SECRET
- * https://www.kirupa.com/konvo_spot_the_bug_worker.php?key=YOUR_SECRET&dry_run=1
+ * https://www.howhy.day/konvo_spot_the_bug_worker.php?key=YOUR_SECRET
+ * https://www.howhy.day/konvo_spot_the_bug_worker.php?key=YOUR_SECRET&dry_run=1
  */
 
 declare(strict_types=1);
@@ -23,14 +23,15 @@ if (is_file($konvoModelRouter)) {
 if (!function_exists('konvo_model_for_task')) {
     function konvo_model_for_task(string $task, array $ctx = array()): string
     {
-        return 'gpt-5.2';
+        return 'deepseek-chat';
     }
 }
 
-if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://forum.kirupa.com');
+if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_SECRET')) define('KONVO_SECRET', trim((string)getenv('DISCOURSE_WEBHOOK_SECRET')));
-if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((string)getenv('OPENAI_API_KEY')));
+if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((string)(getenv('LLM_API_KEY') ?: getenv('DEEPSEEK_API_KEY') ?: getenv('OPENAI_API_KEY'))));
+if (!defined('KONVO_LLM_CHAT_COMPLETIONS_URL')) define('KONVO_LLM_CHAT_COMPLETIONS_URL', rtrim((string)(getenv('LLM_API_BASE_URL') ?: getenv('OPENAI_API_BASE') ?: 'https://api.deepseek.com'), '/') . '/chat/completions');
 if (!defined('KONVO_WEBDEV_CATEGORY_ID')) define('KONVO_WEBDEV_CATEGORY_ID', 42);
 if (!defined('KONVO_TZ')) define('KONVO_TZ', trim((string)(getenv('KONVO_TIMEZONE') ?: 'America/Los_Angeles')));
 
@@ -291,7 +292,7 @@ function spot_openai_json(array $payload): array
         return array('ok' => false, 'error' => 'curl_init unavailable.');
     }
 
-    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    $ch = curl_init(KONVO_LLM_CHAT_COMPLETIONS_URL);
     curl_setopt_array($ch, array(
         CURLOPT_POST => true,
         CURLOPT_RETURNTRANSFER => true,

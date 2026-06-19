@@ -4,10 +4,10 @@
  * Browser-callable JS quiz answer worker.
  *
  * Example:
- * https://www.kirupa.com/konvo_js_quiz_answer_worker.php?key=YOUR_SECRET&dry_run=1
- * https://www.kirupa.com/konvo_js_quiz_answer_worker.php?key=YOUR_SECRET
- * https://www.kirupa.com/konvo_js_quiz_answer_worker.php?key=YOUR_SECRET&force=1
- * https://www.kirupa.com/konvo_js_quiz_answer_worker.php?key=YOUR_SECRET&topic_id=12345&force=1
+ * https://www.howhy.day/konvo_js_quiz_answer_worker.php?key=YOUR_SECRET&dry_run=1
+ * https://www.howhy.day/konvo_js_quiz_answer_worker.php?key=YOUR_SECRET
+ * https://www.howhy.day/konvo_js_quiz_answer_worker.php?key=YOUR_SECRET&force=1
+ * https://www.howhy.day/konvo_js_quiz_answer_worker.php?key=YOUR_SECRET&topic_id=12345&force=1
  */
 
 declare(strict_types=1);
@@ -50,7 +50,7 @@ if (is_file($signatureHelper)) {
 }
 require_once __DIR__ . '/kirupa_article_helper.php';
 
-if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://forum.kirupa.com');
+if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_SECRET')) define('KONVO_SECRET', trim((string)getenv('DISCOURSE_WEBHOOK_SECRET')));
 if (!defined('KONVO_TZ')) define('KONVO_TZ', trim((string)(getenv('KONVO_TIMEZONE') ?: 'America/Los_Angeles')));

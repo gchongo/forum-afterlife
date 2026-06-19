@@ -237,7 +237,7 @@ function repliedToBotUsername(array $payload, array $post, int $topicId, array $
         return '';
     }
 
-    $topic = fetchJson('https://forum.kirupa.com/t/' . $topicId . '.json');
+    $topic = fetchJson('https://www.howhy.day/t/' . $topicId . '.json');
     if (!is_array($topic)) {
         return '';
     }
@@ -268,7 +268,7 @@ function topicOpBotUsername(int $topicId, array $botEndpointMap): string
         return '';
     }
 
-    $topic = fetchJson('https://forum.kirupa.com/t/' . $topicId . '.json');
+    $topic = fetchJson('https://www.howhy.day/t/' . $topicId . '.json');
     if (!is_array($topic)) {
         return '';
     }

@@ -4,10 +4,10 @@
  * Browser-callable random unreplied topic responder.
  *
  * Test (no posting):
- * https://www.kirupa.com/konvo_random_unreplied_reply_worker.php?key=YOUR_SECRET&dry_run=1
+ * https://www.howhy.day/konvo_random_unreplied_reply_worker.php?key=YOUR_SECRET&dry_run=1
  *
  * Real run:
- * https://www.kirupa.com/konvo_random_unreplied_reply_worker.php?key=YOUR_SECRET
+ * https://www.howhy.day/konvo_random_unreplied_reply_worker.php?key=YOUR_SECRET
  */
 
 header('Content-Type: application/json; charset=utf-8');
@@ -26,13 +26,14 @@ if (is_file($konvoModelRouter)) {
 if (!function_exists('konvo_model_for_task')) {
     function konvo_model_for_task(string $task, array $ctx = array()): string
     {
-        return 'gpt-5.4';
+        return 'deepseek-chat';
     }
 }
 
-if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://forum.kirupa.com');
+if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_DISCOURSE_API_KEY')) define('KONVO_DISCOURSE_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
-if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((string)getenv('OPENAI_API_KEY')));
+if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((string)(getenv('LLM_API_KEY') ?: getenv('DEEPSEEK_API_KEY') ?: getenv('OPENAI_API_KEY'))));
+if (!defined('KONVO_LLM_CHAT_COMPLETIONS_URL')) define('KONVO_LLM_CHAT_COMPLETIONS_URL', rtrim((string)(getenv('LLM_API_BASE_URL') ?: getenv('OPENAI_API_BASE') ?: 'https://api.deepseek.com'), '/') . '/chat/completions');
 if (!defined('KONVO_SECRET')) define('KONVO_SECRET', trim((string)getenv('DISCOURSE_WEBHOOK_SECRET')));
 
 function worker_model_for_task($task, $ctx = array())
@@ -463,6 +464,9 @@ function fetch_json($url, $headers = array())
 function post_json($url, $payload, $headers = array())
 {
     if (!function_exists('curl_init')) return array('ok' => false, 'status' => 0, 'error' => 'curl unavailable', 'body' => array(), 'raw' => '');
+    if ((string)$url === 'https://api.openai.com/v1/chat/completions') {
+        $url = KONVO_LLM_CHAT_COMPLETIONS_URL;
+    }
     $ch = curl_init($url);
     $baseHeaders = array('Content-Type: application/json', 'Accept: application/json');
     curl_setopt_array($ch, array(
@@ -4046,7 +4050,7 @@ function find_related_internet_link($title, $body)
         $ttl = isset($hit['title']) ? trim((string)$hit['title']) : '';
         if ($ttl === '') $ttl = isset($hit['story_title']) ? trim((string)$hit['story_title']) : '';
         if ($link === '' || $ttl === '') continue;
-        if (stripos($link, 'forum.kirupa.com') !== false) continue;
+        if (stripos($link, 'www.howhy.day') !== false) continue;
         if (!link_relevant_to_topic($title, $body, $ttl, $link)) continue;
 
         $score = link_overlap_score($topicBlob, $ttl);

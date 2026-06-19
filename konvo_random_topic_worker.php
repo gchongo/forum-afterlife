@@ -4,8 +4,8 @@
  * Browser-callable random topic poster.
  *
  * Example:
- * https://www.kirupa.com/konvo_random_topic_worker.php?key=YOUR_SECRET
- * https://www.kirupa.com/konvo_random_topic_worker.php?key=YOUR_SECRET&dry_run=1
+ * https://www.howhy.day/konvo_random_topic_worker.php?key=YOUR_SECRET
+ * https://www.howhy.day/konvo_random_topic_worker.php?key=YOUR_SECRET&dry_run=1
  */
 
 header('Content-Type: application/json; charset=utf-8');
@@ -64,13 +64,14 @@ if (is_file($konvoModelRouter)) {
 if (!function_exists('konvo_model_for_task')) {
     function konvo_model_for_task(string $task, array $ctx = array()): string
     {
-        return 'gpt-5.4';
+        return 'deepseek-chat';
     }
 }
 
-if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://forum.kirupa.com');
+if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
-if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((string)getenv('OPENAI_API_KEY')));
+if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((string)(getenv('LLM_API_KEY') ?: getenv('DEEPSEEK_API_KEY') ?: getenv('OPENAI_API_KEY'))));
+if (!defined('KONVO_LLM_CHAT_COMPLETIONS_URL')) define('KONVO_LLM_CHAT_COMPLETIONS_URL', rtrim((string)(getenv('LLM_API_BASE_URL') ?: getenv('OPENAI_API_BASE') ?: 'https://api.deepseek.com'), '/') . '/chat/completions');
 if (!defined('KONVO_SECRET')) define('KONVO_SECRET', trim((string)getenv('DISCOURSE_WEBHOOK_SECRET')));
 if (!defined('KONVO_RANDOM_TOPIC_FAST_MODE')) define('KONVO_RANDOM_TOPIC_FAST_MODE', getenv('KONVO_RANDOM_TOPIC_FAST_MODE') === false ? '1' : (string)getenv('KONVO_RANDOM_TOPIC_FAST_MODE'));
 if (!defined('KONVO_FEED_FETCH_TIMEOUT')) define('KONVO_FEED_FETCH_TIMEOUT', 8);
@@ -759,7 +760,7 @@ function konvo_pick_topic_category_decision($title, $raw, $picked = array())
         'temperature' => 0.1,
     );
 
-    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    $ch = curl_init(KONVO_LLM_CHAT_COMPLETIONS_URL);
     curl_setopt_array($ch, array(
         CURLOPT_POST => true,
         CURLOPT_RETURNTRANSFER => true,
@@ -1185,7 +1186,7 @@ function konvo_generate_digest_intro_with_llm($items)
         'temperature' => 0.35,
     );
 
-    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    $ch = curl_init(KONVO_LLM_CHAT_COMPLETIONS_URL);
     curl_setopt_array($ch, array(
         CURLOPT_POST => true,
         CURLOPT_RETURNTRANSFER => true,
@@ -1263,7 +1264,7 @@ function konvo_generate_digest_title_with_llm($items)
         'temperature' => 0.55,
     );
 
-    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    $ch = curl_init(KONVO_LLM_CHAT_COMPLETIONS_URL);
     curl_setopt_array($ch, array(
         CURLOPT_POST => true,
         CURLOPT_RETURNTRANSFER => true,
@@ -1575,7 +1576,7 @@ function konvo_generate_body_summary_with_llm($bot, $item, $strict)
         'temperature' => 0.7,
     );
 
-    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    $ch = curl_init(KONVO_LLM_CHAT_COMPLETIONS_URL);
     curl_setopt_array($ch, array(
         CURLOPT_POST => true,
         CURLOPT_RETURNTRANSFER => true,
@@ -1696,7 +1697,7 @@ function konvo_generate_image_lead_with_llm($bot, $item, $strict)
         'temperature' => 0.7,
     );
 
-    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    $ch = curl_init(KONVO_LLM_CHAT_COMPLETIONS_URL);
     curl_setopt_array($ch, array(
         CURLOPT_POST => true,
         CURLOPT_RETURNTRANSFER => true,
@@ -1811,7 +1812,7 @@ function konvo_generate_gaming_video_lead_with_llm($bot, $item, $youtubeUrl, $st
         'temperature' => 0.7,
     );
 
-    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    $ch = curl_init(KONVO_LLM_CHAT_COMPLETIONS_URL);
     curl_setopt_array($ch, array(
         CURLOPT_POST => true,
         CURLOPT_RETURNTRANSFER => true,
@@ -2055,7 +2056,7 @@ function konvo_generate_title_with_llm($item, $strict)
         'temperature' => 0.6,
     );
 
-    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    $ch = curl_init(KONVO_LLM_CHAT_COMPLETIONS_URL);
     curl_setopt_array($ch, array(
         CURLOPT_POST => true,
         CURLOPT_RETURNTRANSFER => true,

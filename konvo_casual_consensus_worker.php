@@ -11,13 +11,14 @@ if (is_file($konvoModelRouter)) {
 if (!function_exists('konvo_model_for_task')) {
     function konvo_model_for_task(string $task, array $ctx = array()): string
     {
-        return 'gpt-5.4';
+        return 'deepseek-chat';
     }
 }
 
-if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://forum.kirupa.com');
+if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_DISCOURSE_API_KEY')) define('KONVO_DISCOURSE_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
-if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((string)getenv('OPENAI_API_KEY')));
+if (!defined('KONVO_OPENAI_API_KEY')) define('KONVO_OPENAI_API_KEY', trim((string)(getenv('LLM_API_KEY') ?: getenv('DEEPSEEK_API_KEY') ?: getenv('OPENAI_API_KEY'))));
+if (!defined('KONVO_LLM_CHAT_COMPLETIONS_URL')) define('KONVO_LLM_CHAT_COMPLETIONS_URL', rtrim((string)(getenv('LLM_API_BASE_URL') ?: getenv('OPENAI_API_BASE') ?: 'https://api.deepseek.com'), '/') . '/chat/completions');
 if (!defined('KONVO_SECRET')) define('KONVO_SECRET', trim((string)getenv('DISCOURSE_WEBHOOK_SECRET')));
 
 function out_json(int $status, array $data): void
@@ -85,6 +86,9 @@ function fetch_json(string $url, array $headers = array()): ?array
 function post_json(string $url, array $payload, array $headers = array()): array
 {
     if (!function_exists('curl_init')) return array('ok' => false, 'status' => 0, 'error' => 'curl unavailable', 'body' => array(), 'raw' => '');
+    if ($url === 'https://api.openai.com/v1/chat/completions') {
+        $url = KONVO_LLM_CHAT_COMPLETIONS_URL;
+    }
     $ch = curl_init($url);
     $baseHeaders = array('Content-Type: application/json', 'Accept: application/json');
     curl_setopt_array($ch, array(

@@ -15,9 +15,9 @@ if (!function_exists('konvo_model_tiers')) {
         $l = trim((string)getenv('MODEL_TIER_L'));
 
         $tiers = [
-            's' => $s !== '' ? $s : 'gpt-5.4-mini',
-            'm' => $m !== '' ? $m : 'gpt-5.2',
-            'l' => $l !== '' ? $l : 'gpt-5.4',
+            's' => $s !== '' ? $s : 'deepseek-chat',
+            'm' => $m !== '' ? $m : 'deepseek-chat',
+            'l' => $l !== '' ? $l : 'deepseek-chat',
         ];
         return $tiers;
     }
