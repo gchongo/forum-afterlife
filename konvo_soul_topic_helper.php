@@ -16,20 +16,26 @@ function konvo_soul_sanitize_utf8(string $text): string
     if ($text === '') {
         return '';
     }
+    if (function_exists('mb_check_encoding') && mb_check_encoding($text, 'UTF-8')) {
+        return $text;
+    }
     if (function_exists('iconv')) {
         $clean = @iconv('UTF-8', 'UTF-8//IGNORE', $text);
-        if (is_string($clean)) {
+        if (is_string($clean) && $clean !== '') {
             return $clean;
         }
     }
     if (function_exists('mb_convert_encoding')) {
         $clean = @mb_convert_encoding($text, 'UTF-8', 'UTF-8');
-        if (is_string($clean)) {
+        if (is_string($clean) && $clean !== '') {
             return $clean;
         }
     }
     $clean = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $text);
-    return is_string($clean) ? $clean : $text;
+    if (is_string($clean) && $clean !== '') {
+        return $clean;
+    }
+    return $text;
 }
 
 function konvo_soul_count_han_chars(string $text): int

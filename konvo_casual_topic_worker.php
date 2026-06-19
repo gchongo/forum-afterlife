@@ -33,7 +33,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v8');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v9');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -836,18 +836,19 @@ function casual_normalize_title(string $title): string
     $title = html_entity_decode($title, ENT_QUOTES, 'UTF-8');
     $title = preg_replace('/\s+/', ' ', $title) ?? $title;
     $title = trim($title, " \t\n\r\0\x0B\"'`");
-    if ($title === '') return '';
-    if (strlen($title) > 88) {
-        $short = trim((string)substr($title, 0, 88));
-        $lastSpace = strrpos($short, ' ');
-        if ($lastSpace !== false && $lastSpace > 28) {
-            $short = trim((string)substr($short, 0, (int)$lastSpace));
-        }
-        $title = $short;
+    if ($title === '') {
+        return '';
     }
-    $title = preg_replace('/[:;,\.\-]+$/', '', $title) ?? $title;
-    $title = trim($title);
-    return $title;
+    $maxLen = function_exists('mb_strlen') ? mb_strlen($title, 'UTF-8') : strlen($title);
+    if ($maxLen > 60) {
+        if (function_exists('mb_substr')) {
+            $title = trim((string)mb_substr($title, 0, 60, 'UTF-8'));
+        } else {
+            $title = casual_safe_substr($title, 180);
+        }
+    }
+    $title = preg_replace('/[:;,\.\-]+$/u', '', $title) ?? $title;
+    return trim($title);
 }
 
 function casual_normalize_signature(string $text, string $signature): string
@@ -1322,11 +1323,58 @@ function casual_post_topic(string $botUsername, string $title, string $raw, int 
         return array('ok' => false, 'status' => 0, 'error' => 'No Api-Username configured for posting.', 'body' => array(), 'raw' => '');
     }
 
+    $title = konvo_soul_sanitize_utf8(trim($title));
+    $raw = konvo_soul_sanitize_utf8(trim($raw));
+    $categoryId = max(0, (int)$categoryId);
+
+    if ($title === '' || konvo_soul_count_han_chars($title) < 4) {
+        return array(
+            'ok' => false,
+            'status' => 0,
+            'error' => 'post_blocked_invalid_title',
+            'body' => array(),
+            'raw' => '',
+            'post_debug' => array(
+                'title_preview' => casual_safe_substr($title, 80),
+                'title_han' => konvo_soul_count_han_chars($title),
+                'category_id' => $categoryId,
+            ),
+        );
+    }
+    if ($categoryId <= 0) {
+        return array(
+            'ok' => false,
+            'status' => 0,
+            'error' => 'post_blocked_invalid_category',
+            'body' => array(),
+            'raw' => '',
+            'post_debug' => array('category_id' => $categoryId),
+        );
+    }
+
     $payload = array(
         'title' => $title,
         'raw' => $raw,
         'category' => $categoryId,
     );
+
+    $jsonBody = casual_json_encode($payload);
+    if ($jsonBody === '' || $jsonBody === '{"ok":false,"error":"json_encode_failed"}') {
+        return array(
+            'ok' => false,
+            'status' => 0,
+            'error' => 'post_payload_json_encode_failed',
+            'body' => array(),
+            'raw' => '',
+            'post_debug' => array(
+                'title_preview' => casual_safe_substr($title, 80),
+                'title_han' => konvo_soul_count_han_chars($title),
+                'raw_han' => konvo_soul_count_han_chars($raw),
+                'category_id' => $categoryId,
+                'json_last_error' => function_exists('json_last_error_msg') ? json_last_error_msg() : 'unknown',
+            ),
+        );
+    }
 
     $ch = curl_init(rtrim(KONVO_BASE_URL, '/') . '/posts.json');
     curl_setopt_array($ch, array(
@@ -1334,11 +1382,11 @@ function casual_post_topic(string $botUsername, string $title, string $raw, int 
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 35,
         CURLOPT_HTTPHEADER => array(
-            'Content-Type: application/json',
+            'Content-Type: application/json; charset=utf-8',
             'Api-Key: ' . KONVO_API_KEY,
             'Api-Username: ' . $postAs,
         ),
-        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_SLASHES),
+        CURLOPT_POSTFIELDS => $jsonBody,
     ));
 
     $body = curl_exec($ch);
@@ -1638,13 +1686,23 @@ if ($dryRun) {
 
 $post = casual_post_topic((string)($bot['username'] ?? 'BAI'), $title, $raw, $categoryId);
 if (!$post['ok']) {
-    casual_out(500, array(
+    casual_out(200, array(
         'ok' => false,
+        'posted' => false,
         'error' => 'Failed to post casual topic.',
         'status' => $post['status'],
         'curl_error' => $post['error'],
         'response' => $post['body'],
         'raw' => $post['raw'],
+        'worker_build' => (string)KONVO_WORKER_BUILD,
+        'post_debug' => array(
+            'title_preview' => casual_safe_substr($title, 80),
+            'title_han' => konvo_soul_count_han_chars($title),
+            'raw_han' => konvo_soul_count_han_chars($raw),
+            'category_id' => $categoryId,
+            'post_as' => (string)($post['post_as'] ?? ''),
+        ),
+        'hint' => '422 with empty title/category usually means json_encode failed on invalid UTF-8 in LLM output. v9 fixes this; rebuild container.',
     ));
 }
 
