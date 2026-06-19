@@ -11,17 +11,43 @@ function konvo_soul_prompt_for_topic(array $bot): string
     return konvo_load_soul($soulKey, $soulFallback);
 }
 
+function konvo_soul_sanitize_utf8(string $text): string
+{
+    if ($text === '') {
+        return '';
+    }
+    if (function_exists('iconv')) {
+        $clean = @iconv('UTF-8', 'UTF-8//IGNORE', $text);
+        if (is_string($clean)) {
+            return $clean;
+        }
+    }
+    if (function_exists('mb_convert_encoding')) {
+        $clean = @mb_convert_encoding($text, 'UTF-8', 'UTF-8');
+        if (is_string($clean)) {
+            return $clean;
+        }
+    }
+    $clean = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $text);
+    return is_string($clean) ? $clean : $text;
+}
+
 function konvo_soul_count_han_chars(string $text): int
 {
+    $text = konvo_soul_sanitize_utf8($text);
     if ($text === '') {
         return 0;
     }
-    $ok = preg_match_all('/\p{Han}/u', $text, $m);
+    $ok = @preg_match_all('/\p{Han}/u', $text, $m);
     if (is_int($ok) && $ok > 0) {
         return $ok;
     }
-    $fallback = preg_match_all('/[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}\x{f900}-\x{faFF}]/u', $text, $m2);
-    return is_int($fallback) ? $fallback : 0;
+    $fallback = @preg_match_all('/[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}\x{f900}-\x{faFF}]/u', $text, $m2);
+    if (is_int($fallback) && $fallback > 0) {
+        return $fallback;
+    }
+    $bytes = @preg_match_all('/[\xE4-\xE9][\x80-\xBF]{2}/', $text, $m3);
+    return is_int($bytes) ? $bytes : 0;
 }
 
 function konvo_soul_count_latin_chars(string $text): int
@@ -383,8 +409,8 @@ function konvo_soul_expand_han_chars(string $raw, int $targetHan, string $suffix
 
 function konvo_soul_validate_topic(string $title, string $raw, array $rules, bool $relaxed = false): array
 {
-    $title = trim($title);
-    $raw = trim($raw);
+    $title = konvo_soul_sanitize_utf8(trim($title));
+    $raw = konvo_soul_sanitize_utf8(trim($raw));
     $longform = !empty($rules['longform']);
 
     if ($title === '' || strlen($title) < 6) {

@@ -33,7 +33,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v7');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v8');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -832,7 +832,7 @@ function casual_ensure_question_mark_title(string $title): string
 
 function casual_normalize_title(string $title): string
 {
-    $title = trim(strip_tags($title));
+    $title = konvo_soul_sanitize_utf8(trim(strip_tags($title)));
     $title = html_entity_decode($title, ENT_QUOTES, 'UTF-8');
     $title = preg_replace('/\s+/', ' ', $title) ?? $title;
     $title = trim($title, " \t\n\r\0\x0B\"'`");
@@ -961,7 +961,7 @@ function casual_append_quirky_media_before_signature(string $raw, string $signat
 
 function casual_normalize_body(string $raw, string $signature): string
 {
-    $raw = str_replace(array("\r\n", "\r"), "\n", (string)$raw);
+    $raw = konvo_soul_sanitize_utf8(str_replace(array("\r\n", "\r"), "\n", (string)$raw));
     $raw = trim($raw);
     $raw = preg_replace('/\n{3,}/', "\n\n", $raw) ?? $raw;
     if ($raw === '') return '';
@@ -1051,7 +1051,7 @@ function casual_openai_json(array $payload, array $rules = array()): array
         'status' => $status,
         'error' => '',
         'json' => is_array($decoded) ? $decoded : array(),
-        'raw' => (string)$body,
+        'raw' => konvo_soul_sanitize_utf8((string)$body),
     );
 }
 
@@ -1249,7 +1249,7 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
     }
 
     $json = $res['json'];
-    $content = trim((string)($json['choices'][0]['message']['content'] ?? ''));
+    $content = konvo_soul_sanitize_utf8(trim((string)($json['choices'][0]['message']['content'] ?? '')));
     if ($content === '') {
         return array('ok' => false, 'error' => 'Model returned empty content');
     }
@@ -1380,6 +1380,7 @@ if (isset($_GET['ping']) && (string)$_GET['ping'] === '1') {
         'mbstring' => function_exists('mb_substr'),
         'llm_key_set' => KONVO_OPENAI_API_KEY !== '',
         'max_execution_time' => (int)ini_get('max_execution_time'),
+        'iconv' => function_exists('iconv'),
         'files' => array(
             'konvo_soul_topic_helper.php' => is_file(__DIR__ . '/konvo_soul_topic_helper.php'),
             'souls/bai.SOUL.md' => is_file(__DIR__ . '/souls/bai.SOUL.md'),
