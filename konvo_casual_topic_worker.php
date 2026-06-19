@@ -16,6 +16,7 @@ declare(strict_types=1);
 header('Content-Type: application/json; charset=utf-8');
 
 require_once __DIR__ . '/konvo_soul_helper.php';
+require_once __DIR__ . '/konvo_soul_topic_helper.php';
 require_once __DIR__ . '/konvo_signature_helper.php';
 require_once __DIR__ . '/konvo_bot_registry.php';
 $konvoForumPromptHelper = __DIR__ . '/konvo_forum_prompt_helper.php';
@@ -983,52 +984,6 @@ function casual_looks_too_technical(string $text): bool
     return (bool)preg_match('/\b(javascript|typescript|css|html|react|vue|angular|api endpoint|database schema|backend|frontend|docker|kubernetes|ci\/cd|compiler|runtime|stack trace|queryselector|npm|package\.json|php warning|sql query)\b/i', $t);
 }
 
-function casual_validate_generated_topic(string $title, string $raw, bool $historyMode = false, bool $relaxed = false): array
-{
-    $title = trim($title);
-    $raw = trim($raw);
-
-    if ($title === '' || strlen($title) < 6) {
-        return array('ok' => false, 'error' => 'title too short');
-    }
-    if (strlen($title) > ($historyMode ? 120 : 88)) {
-        return array('ok' => false, 'error' => 'title too long');
-    }
-    if ($raw === '' || strlen($raw) < ($historyMode ? 200 : 40)) {
-        return array('ok' => false, 'error' => 'body too short');
-    }
-    if (strlen($raw) > ($historyMode ? 3800 : 2200)) {
-        return array('ok' => false, 'error' => 'body too long');
-    }
-    if (!$historyMode && casual_has_controversial_signals($title . "\n" . $raw)) {
-        return array('ok' => false, 'error' => 'topic looked controversial');
-    }
-    if ($historyMode) {
-        if (!casual_is_chinese_like($title . "\n" . $raw)) {
-            return array('ok' => false, 'error' => 'history mode requires Chinese output');
-        }
-        $minHan = $relaxed ? 300 : 500;
-        if (casual_count_han_chars($raw) < $minHan) {
-            return array('ok' => false, 'error' => 'history mode body must be at least ' . $minHan . ' Chinese chars');
-        }
-        $paraCount = preg_match_all('/\n\s*\n/u', $raw, $m);
-        $blocks = (is_int($paraCount) ? $paraCount : 0) + 1;
-        $minBlocks = $relaxed ? 2 : 3;
-        $maxBlocks = 6;
-        if ($blocks < $minBlocks || $blocks > $maxBlocks) {
-            return array('ok' => false, 'error' => 'history mode needs ' . $minBlocks . '-' . $maxBlocks . ' paragraphs');
-        }
-    } else {
-        if (strlen($raw) < ($relaxed ? 60 : 80)) {
-            return array('ok' => false, 'error' => 'body too short for meaningful discussion');
-        }
-    }
-    if (strpos($raw, '```') !== false) {
-        return array('ok' => false, 'error' => 'code block not expected for casual topic');
-    }
-    return array('ok' => true);
-}
-
 function casual_extract_json_object(string $content): array
 {
     $content = trim($content);
@@ -1048,15 +1003,12 @@ function casual_extract_json_object(string $content): array
     return is_array($decoded) ? $decoded : array();
 }
 
-function casual_llm_timeout_seconds(bool $historyMode = false): int
+function casual_llm_timeout_seconds(array $rules): int
 {
-    if ((bool)KONVO_TOPIC_FAST_MODE) {
-        return $historyMode ? 45 : 28;
-    }
-    return $historyMode ? 35 : 22;
+    return konvo_soul_topic_llm_timeout($rules);
 }
 
-function casual_openai_json(array $payload, bool $historyMode = false): array
+function casual_openai_json(array $payload, array $rules = array()): array
 {
     if (!function_exists('curl_init')) {
         return array('ok' => false, 'status' => 0, 'error' => 'curl_init unavailable', 'json' => array(), 'raw' => '');
@@ -1067,7 +1019,7 @@ function casual_openai_json(array $payload, bool $historyMode = false): array
         CURLOPT_POST => true,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_CONNECTTIMEOUT => 8,
-        CURLOPT_TIMEOUT => casual_llm_timeout_seconds($historyMode),
+        CURLOPT_TIMEOUT => casual_llm_timeout_seconds($rules),
         CURLOPT_HTTPHEADER => array(
             'Content-Type: application/json',
             'Authorization: Bearer ' . KONVO_OPENAI_API_KEY,
@@ -1204,45 +1156,6 @@ function casual_seed_topic_pool(): array
     );
 }
 
-function casual_history_seed_topic_pool(): array
-{
-    return array(
-        '唐代两税法为什么能稳定财政一段时间',
-        '明代财政对白银依赖加深的制度原因',
-        '宋代城市化与市场网络扩张的互动关系',
-        '汉代郡县制在地方治理中的实际运行逻辑',
-        '科举制度对地方社会流动的真实影响边界',
-        '晚清新政中的财政与军政重组难点',
-        '明清时期漕运体系与国家治理成本',
-        '边疆治理中军政与财政如何互相牵制',
-        '地方精英与国家权力在基层的协作与冲突',
-        '史料叙事与制度现实之间的偏差从何而来',
-    );
-}
-
-function casual_count_han_chars(string $text): int
-{
-    $ok = preg_match_all('/\p{Han}/u', $text, $m);
-    return is_int($ok) ? $ok : 0;
-}
-
-function casual_is_chinese_like(string $text): bool
-{
-    $han = casual_count_han_chars($text);
-    if ($han < 40) {
-        return false;
-    }
-    $latin = preg_match_all('/[A-Za-z]/', $text, $m2);
-    $latinCount = is_int($latin) ? $latin : 0;
-    return $latinCount <= max(30, (int)floor($han * 0.25));
-}
-
-function casual_is_history_mode(array $bot, int $categoryId): bool
-{
-    $u = strtolower(trim((string)($bot['username'] ?? '')));
-    return $categoryId === (int)KONVO_HISTORY_CATEGORY_ID || $u === 'higuyer';
-}
-
 function casual_pick_random_seed_topic(array $recentLocal, array $recentForumTitles, array $pool = array()): string
 {
     if ($pool === array()) {
@@ -1279,59 +1192,23 @@ function casual_pick_random_seed_topic(array $recentLocal, array $recentForumTit
 
 function casual_generate_with_llm(array $bot, string $signature, array $recent, array $recentForumTitles, bool $strict, string $extraAvoidance = '', array $lane = array(), int $categoryId = 0): array
 {
-    $botName = trim((string)($bot['name'] ?? 'BAI'));
-    $soulKey = trim((string)($bot['soul_key'] ?? strtolower($botName)));
-    $soulFallback = trim((string)($bot['soul_fallback'] ?? 'Write naturally, concise, and human.'));
-    $soulPrompt = konvo_compose_forum_persona_system_prompt(
-        konvo_load_soul($soulKey, $soulFallback)
-    );
+    $soulPrompt = konvo_soul_prompt_for_topic($bot);
+    $rules = konvo_soul_parse_topic_rules($soulPrompt);
     $recentHints = casual_recent_hint_lines($recent);
     $recentOpeningHints = casual_recent_opening_stems($recent, 14);
     $laneKey = strtolower(trim((string)($lane['key'] ?? 'general')));
-    $historyMode = casual_is_history_mode($bot, $categoryId);
-    $seedPool = $historyMode ? casual_history_seed_topic_pool() : casual_seed_topic_pool();
+    $seedPool = konvo_soul_default_seed_pool($soulPrompt, $rules);
     $seedTopic = casual_pick_random_seed_topic($recent, $recentForumTitles, $seedPool);
 
-    if ($historyMode) {
-        $system = ($soulPrompt !== '' ? "Bot voice and personality guidance:\n{$soulPrompt}\n\n" : '')
-            . '你要生成一篇中文历史论坛话题帖。'
-            . '只返回 JSON，结构为：'
-            . '{"plan_mood":"...","plan_angle":"...","plan_posting_intent":"...","plan_lane":"history","title":"...","raw":"..."}。'
-            . '硬性规则：标题必须中文；正文必须中文；正文不少于500个中文字符；3到6段；使用 Markdown。'
-            . '主题限定：中国历史（制度、财政、军事、地方治理、科举、土地、交通、城市、思想、文物考古等）。'
-            . '不要虚构史实、引文、数据、书目、网址。不要写历史小说、段子、阴谋论、标题党。'
-            . '结尾提出1到2个具体、有讨论价值的问题。'
-            . '不要输出任何解释文字，只输出 JSON。';
-
-        $user = "种子主题：{$seedTopic}\n"
-            . "请围绕该主题写一篇中文历史讨论帖。\n"
-            . "避免与近期帖子重复：\n{$recentHints}\n\n"
-            . ($strict ? "这是重试，请明显更换切入角度。\n" : '')
-            . ($extraAvoidance !== '' ? ("额外避免点：" . trim($extraAvoidance) . "\n") : '')
-            . "输出 JSON。";
-    } else {
-        $system = ($soulPrompt !== '' ? "Bot voice and personality guidance:\n{$soulPrompt}\n\n" : '')
-            . 'You generate a single forum discussion starter for humans. '
-            . 'Return ONLY JSON with this schema: '
-            . '{"plan_mood":"...","plan_angle":"...","plan_posting_intent":"...","plan_lane":"...","title":"...","raw":"..."}. '
-            . 'SOUL rules have higher priority than generic defaults. '
-            . 'Use natural human language that matches the bot SOUL. '
-            . 'Title should be specific and natural. '
-            . 'Body should have substance (normally 2-5 paragraphs unless SOUL says otherwise). '
-            . 'You may use Chinese or other language when SOUL/category implies it. '
-            . 'No links, no hashtags, no code blocks unless SOUL explicitly requires them. '
-            . 'Do not sign the post; Discourse already shows the author username. '
-            . 'Uniqueness is mandatory: do not paraphrase recent topics.';
-
-        $user = "参考主题（可改写或忽略）：{$seedTopic}\n"
-            . "请按该 bot 的 SOUL 生成一篇可发帖的话题内容。\n"
-            . "plan_lane 用一个简短标签概括方向。\n"
-            . "Recent topics to avoid repeating:\n{$recentHints}\n\n"
-            . "Recent opening stems to avoid reusing:\n{$recentOpeningHints}\n\n"
-            . ($strict ? "这是重试，请明显更换切入角度。\n" : '')
-            . ($extraAvoidance !== '' ? ("Avoidance hint / 避免点: " . trim($extraAvoidance) . "\n") : '')
-            . "Return JSON only.";
-    }
+    $system = konvo_soul_build_topic_system_prompt($soulPrompt, $rules, $categoryId);
+    $user = konvo_soul_build_topic_user_prompt(
+        $seedTopic,
+        $rules,
+        $recentHints,
+        $recentOpeningHints,
+        $strict,
+        $extraAvoidance
+    );
 
     $payload = array(
         'model' => konvo_model_for_task('casual_topic'),
@@ -1342,7 +1219,7 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
         'temperature' => 0.9,
     );
 
-    $res = casual_openai_json($payload, $historyMode);
+    $res = casual_openai_json($payload, $rules);
     if (!$res['ok']) {
         return array('ok' => false, 'error' => 'OpenAI request failed', 'detail' => $res['error'], 'status' => $res['status']);
     }
@@ -1369,7 +1246,7 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
         return array('ok' => false, 'error' => 'Model JSON missing title/raw', 'parsed' => $obj);
     }
 
-    $valid = casual_validate_generated_topic($title, $raw, $historyMode, $strict);
+    $valid = konvo_soul_validate_topic($title, $raw, $rules, $strict);
     if (!$valid['ok']) {
         return array('ok' => false, 'error' => (string)($valid['error'] ?? 'validation failed'), 'title' => $title, 'raw' => $raw);
     }
@@ -1385,75 +1262,15 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
             'lane' => $planLane,
             'seed_topic' => $seedTopic,
         ),
+        'soul_rules' => $rules,
     );
 }
 
 function casual_template_fallback(array $bot, int $categoryId, string $seedTopic = ''): array
 {
-    $historyMode = casual_is_history_mode($bot, $categoryId);
-    $seed = trim($seedTopic);
-    if ($seed === '') {
-        $seed = $historyMode
-            ? casual_pick_random_seed_topic(array(), array(), casual_history_seed_topic_pool())
-            : casual_pick_random_seed_topic(array(), array(), casual_seed_topic_pool());
-    }
-
-    if ($historyMode) {
-        $title = $seed;
-        $raw = $seed . "是一个值得从制度、财政与社会结构多个层面重新讨论的问题。\n\n"
-            . "从史料来看，我们往往更容易记住事件本身，却忽略了背后长期运行的治理逻辑。"
-            . "比如政策设计时的约束条件、执行链条中的地方差异，以及不同群体在其中的实际处境，"
-            . "这些细节常常决定了一个制度能否在较长时期内维持稳定。\n\n"
-            . "如果把它放到更大的历史脉络里观察，会发现许多表面上的“偶然结果”，"
-            . "其实都对应着更深层的结构性因素。"
-            . "财政压力、军事需求、交通与信息条件、地方精英与国家权力的互动，"
-            . "都会在不同阶段以不同方式显现。\n\n"
-            . "因此，讨论这类主题时，关键不只是复述结论，而是比较不同解释路径："
-            . "哪些变量最可能改变结果？哪些证据仍然不足？哪些常见说法可能过于简化？\n\n"
-            . "想听听大家的看法：在你熟悉的相关研究或阅读中，"
-            . "哪些细节最让你重新理解了这一问题的复杂性？"
-            . "如果要从一个被忽视的角度切入，你会优先讨论什么？";
-
-        if (casual_count_han_chars($raw) < 500) {
-            $raw .= "\n\n另外，也欢迎补充不同朝代或不同地区之间的对照案例，"
-                . "看看同一套制度逻辑在不同条件下为何会产生不同后果。";
-        }
-
-        return array(
-            'ok' => true,
-            'title' => $title,
-            'raw' => $raw,
-            'plan' => array(
-                'mood' => 'reflective',
-                'angle' => 'structural reinterpretation',
-                'posting_intent' => 'template_fallback',
-                'lane' => 'history',
-                'seed_topic' => $seed,
-            ),
-            'fallback' => true,
-        );
-    }
-
-    $botName = trim((string)($bot['name'] ?? 'BAI'));
-    $title = '关于「' . $seed . '」，大家最近有什么新想法？';
-    $raw = "最近在浏览论坛时，我又想到「{$seed}」这个话题。\n\n"
-        . "有时候同一个问题，不同人的经历会给出完全不同的答案。"
-        . "我很好奇大家现在是更倾向保守一点，还是愿意尝试一些新做法？\n\n"
-        . "如果方便的话，可以分享一个具体例子：你遇到过什么情况，最后是怎么处理的？";
-
-    return array(
-        'ok' => true,
-        'title' => $title,
-        'raw' => $raw,
-        'plan' => array(
-            'mood' => 'curious',
-            'angle' => 'community prompt',
-            'posting_intent' => 'template_fallback',
-            'lane' => 'chat',
-            'seed_topic' => $seed,
-        ),
-        'fallback' => true,
-    );
+    $soulPrompt = konvo_soul_prompt_for_topic($bot);
+    $rules = konvo_soul_parse_topic_rules($soulPrompt);
+    return konvo_soul_topic_fallback($bot, $rules, $seedTopic);
 }
 
 function casual_post_topic(string $botUsername, string $title, string $raw, int $categoryId): array
@@ -1546,6 +1363,8 @@ if ($laneOverride !== '') {
 }
 $categoryId = casual_pick_category_id_for_lane($lane);
 $bot = casual_bot_for_category($categoryId, $bots);
+$soulPromptRun = konvo_soul_prompt_for_topic($bot);
+$soulRulesRun = konvo_soul_parse_topic_rules($soulPromptRun);
 $signatureSeed = strtolower((string)($bot['username'] ?? 'bai') . '|casual-topic|' . date('Y-m-d-H'));
 $signature = function_exists('konvo_signature_with_optional_emoji')
     ? konvo_signature_with_optional_emoji((string)($bot['name'] ?? 'BAI'), $signatureSeed)
@@ -1573,12 +1392,12 @@ $generated = null;
 $bestFallback = null;
 $bestFallbackScore = -1.0;
 $extraAvoidance = '';
-$historyModeRun = casual_is_history_mode($bot, $categoryId);
+$topicModeRun = !empty($soulRulesRun['longform']) ? 'soul_longform' : 'soul';
 $requestStartTs = isset($_SERVER['REQUEST_TIME_FLOAT']) ? (float)$_SERVER['REQUEST_TIME_FLOAT'] : microtime(true);
 $fastMode = (bool)KONVO_TOPIC_FAST_MODE;
 $maxAttempts = $fastMode ? 1 : 2;
-$requestBudget = $fastMode ? 55.0 : 48.0;
-$skipUniquenessGate = $fastMode || $historyModeRun;
+$requestBudget = !empty($soulRulesRun['longform']) ? 55.0 : 48.0;
+$skipUniquenessGate = $fastMode || !empty($soulRulesRun['longform']);
 
 for ($i = 0; $i < $maxAttempts; $i++) {
     if ((microtime(true) - $requestStartTs) > $requestBudget) {
@@ -1671,10 +1490,11 @@ $raw = (string)$generated['raw'];
 $plan = isset($generated['plan']) && is_array($generated['plan']) ? $generated['plan'] : array();
 $categoryDecision = array(
     'ok' => true,
-    'category_key' => $categoryId === (int)KONVO_HISTORY_CATEGORY_ID ? 'history' : 'chat',
+    'category_key' => 'registry',
     'category_id' => $categoryId,
-    'reason' => 'lane_based_category_bot_policy',
+    'reason' => 'bot_registry_category_with_soul_rules',
     'confidence' => 1.0,
+    'soul_rules' => $soulRulesRun,
 );
 $gamingDetected = false;
 $quirkyMode = false;
@@ -1690,6 +1510,8 @@ if ($dryRun) {
         'plan' => $plan,
         'lane' => $lane,
         'used_fallback' => !empty($generated['fallback']),
+        'topic_mode' => $topicModeRun,
+        'soul_rules' => $soulRulesRun,
         'fast_mode' => $fastMode,
         'topic' => array(
             'title' => $title,
@@ -1735,6 +1557,8 @@ casual_out(200, array(
     'plan' => $plan,
     'lane' => $lane,
     'used_fallback' => !empty($generated['fallback']),
+    'topic_mode' => $topicModeRun,
+    'soul_rules' => $soulRulesRun,
     'fast_mode' => $fastMode,
     'topic' => array(
         'title' => $title,
