@@ -534,16 +534,50 @@ function konvo_soul_pick_closing_suffix(): string
     return (string)$suffixes[0];
 }
 
+function konvo_soul_split_body_into_paragraphs(string $raw, int $minPara, int $maxPara): string
+{
+    $blocks = konvo_soul_count_paragraphs($raw);
+    if ($blocks >= $minPara) {
+        return $raw;
+    }
+    $flat = preg_replace('/\s*\n\s*/u', '', $raw) ?? $raw;
+    $sentences = preg_split('/(?<=[。！？!?])/u', $flat, -1, PREG_SPLIT_NO_EMPTY);
+    if (!is_array($sentences) || count($sentences) < $minPara) {
+        return $raw;
+    }
+    $target = max($minPara, min($maxPara > 0 ? $maxPara : 6, (int)ceil(count($sentences) / 2)));
+    $perGroup = max(1, (int)ceil(count($sentences) / $target));
+    $groups = array();
+    for ($i = 0; $i < count($sentences); $i += $perGroup) {
+        $chunk = trim(implode('', array_slice($sentences, $i, $perGroup)));
+        if ($chunk !== '') {
+            $groups[] = $chunk;
+        }
+    }
+    if (count($groups) < $minPara) {
+        return $raw;
+    }
+    if ($maxPara > 0 && count($groups) > $maxPara) {
+        while (count($groups) > $maxPara) {
+            $last = array_pop($groups);
+            $groups[count($groups) - 1] .= $last;
+        }
+    }
+    return implode("\n\n", $groups);
+}
+
 function konvo_soul_prepare_topic(string $title, string $raw, array $rules): array
 {
     $title = konvo_soul_sanitize_utf8(trim($title));
     $raw = konvo_soul_sanitize_utf8(trim($raw));
     $minPara = (int)($rules['min_paragraphs'] ?? 0);
     $maxPara = (int)($rules['max_paragraphs'] ?? 0);
+    $raw = konvo_soul_fix_inline_newlines($raw);
+    if ($minPara > 0) {
+        $raw = konvo_soul_split_body_into_paragraphs($raw, $minPara, $maxPara > 0 ? $maxPara : 6);
+    }
     if ($minPara > 0 || $maxPara > 0) {
         $raw = konvo_soul_normalize_paragraphs($raw, $minPara, $maxPara > 0 ? $maxPara : 99);
-    } else {
-        $raw = konvo_soul_fix_inline_newlines($raw);
     }
     $minHan = (int)($rules['min_han_chars'] ?? 0);
     if ($minHan > 0) {
@@ -592,10 +626,22 @@ function konvo_soul_validate_content_quality(string $title, string $raw): ?strin
 function konvo_soul_expand_han_chars(string $raw, int $targetHan, string $suffix = ''): string
 {
     $raw = trim($raw);
+    $suffixText = $suffix !== '' ? $suffix : '这类问题之所以值得反复讨论，关键在于它连接了具体现象与更长期的结构变化。';
     $guard = 0;
-    while (konvo_soul_count_han_chars($raw) < $targetHan && $guard < 6) {
+    while (konvo_soul_count_han_chars($raw) < $targetHan && $guard < 4) {
         $guard++;
-        $raw .= "\n\n" . ($suffix !== '' ? $suffix : '这类问题之所以值得反复讨论，关键在于它连接了具体现象与更长期的结构变化。');
+        if (str_contains($raw, "\n\n")) {
+            $parts = preg_split('/\n\s*\n/', $raw);
+            if (!is_array($parts) || $parts === array()) {
+                $raw = rtrim($raw) . $suffixText;
+                continue;
+            }
+            $last = rtrim(trim((string)array_pop($parts)));
+            $parts[] = $last . $suffixText;
+            $raw = implode("\n\n", $parts);
+        } else {
+            $raw = rtrim($raw) . $suffixText;
+        }
     }
     return $raw;
 }

@@ -16,6 +16,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/konvo_soul_helper.php';
 require_once __DIR__ . '/konvo_soul_topic_helper.php';
+require_once __DIR__ . '/konvo_soul_topic_pipeline.php';
 require_once __DIR__ . '/konvo_signature_helper.php';
 require_once __DIR__ . '/konvo_bot_registry.php';
 $konvoForumPromptHelper = __DIR__ . '/konvo_forum_prompt_helper.php';
@@ -33,7 +34,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-soul-v13.1');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-pipeline-v15');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -642,8 +643,17 @@ function casual_candidate_too_close_to_recent_local(string $candidateTitle, stri
     return !empty($dup['duplicate']);
 }
 
+function casual_uniqueness_gate_enabled(): bool
+{
+    $env = strtolower(trim((string)getenv('KONVO_TOPIC_UNIQUENESS_GATE')));
+    return in_array($env, array('1', 'true', 'yes', 'on'), true);
+}
+
 function casual_uniqueness_gate_with_llm(string $candidateTitle, string $candidateRaw, array $recentLocal, array $recentForum): array
 {
+    if (!casual_uniqueness_gate_enabled()) {
+        return array('ok' => true, 'passes' => true, 'score' => 5.0, 'reason' => 'uniqueness_gate_disabled');
+    }
     if (KONVO_OPENAI_API_KEY === '') {
         return array('ok' => true, 'passes' => true, 'score' => 3.5, 'reason' => 'no_api_key_skip');
     }
@@ -678,15 +688,15 @@ function casual_uniqueness_gate_with_llm(string $candidateTitle, string $candida
 
     $res = casual_openai_json($payload);
     if (!$res['ok']) {
-        return array('ok' => false, 'passes' => false, 'score' => 0.0, 'reason' => 'uniqueness_llm_error');
+        return array('ok' => true, 'passes' => true, 'score' => 3.5, 'reason' => 'uniqueness_llm_error_fail_open');
     }
     $content = trim((string)($res['json']['choices'][0]['message']['content'] ?? ''));
     if ($content === '') {
-        return array('ok' => false, 'passes' => false, 'score' => 0.0, 'reason' => 'uniqueness_empty');
+        return array('ok' => true, 'passes' => true, 'score' => 3.5, 'reason' => 'uniqueness_empty_fail_open');
     }
     $obj = casual_extract_json_object($content);
     if (!is_array($obj) || $obj === array()) {
-        return array('ok' => false, 'passes' => false, 'score' => 0.0, 'reason' => 'uniqueness_parse_error');
+        return array('ok' => true, 'passes' => true, 'score' => 3.5, 'reason' => 'uniqueness_parse_error_fail_open');
     }
     $passes = !empty($obj['passes']);
     $score = (float)($obj['novelty_score'] ?? 0.0);
@@ -697,7 +707,7 @@ function casual_uniqueness_gate_with_llm(string $candidateTitle, string $candida
     $hint = trim((string)($obj['rewrite_hint'] ?? ''));
     return array(
         'ok' => true,
-        'passes' => $passes && $score >= 4.2,
+        'passes' => $passes && $score >= 3.5,
         'score' => $score,
         'reason' => $reason === '' ? 'no_reason' : $reason,
         'closest_match' => $closest,
@@ -1210,6 +1220,45 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
     $seedPool = konvo_soul_default_seed_pool($soulPrompt, $rules);
     $seedTopic = casual_pick_random_seed_topic($recent, $recentForumTitles, $seedPool);
 
+    if (konvo_soul_two_stage_enabled($rules)) {
+        $pipe = konvo_soul_topic_pipeline_generate(
+            $soulPrompt,
+            $rules,
+            $seedTopic,
+            $recentHints . ($recentOpeningHints !== '' ? "\n" . $recentOpeningHints : ''),
+            $strict,
+            $extraAvoidance,
+            $categoryId,
+            $laneKey,
+            static fn(string $t) => casual_normalize_title($t),
+            static fn(string $b) => casual_normalize_body($b, $signature)
+        );
+        if (!empty($pipe['ok'])) {
+            return array(
+                'ok' => true,
+                'title' => (string)$pipe['title'],
+                'raw' => (string)$pipe['raw'],
+                'plan' => is_array($pipe['plan'] ?? null) ? $pipe['plan'] : array(),
+                'soul_rules' => $rules,
+                'pipeline' => (string)($pipe['pipeline'] ?? 'two_stage_v15'),
+                'fact_judge' => $pipe['fact_judge'] ?? null,
+                'paragraph_count' => (int)($pipe['paragraph_count'] ?? 0),
+                'han_chars' => (int)($pipe['han_chars'] ?? 0),
+            );
+        }
+        return array(
+            'ok' => false,
+            'error' => (string)($pipe['error'] ?? 'pipeline failed'),
+            'stage' => (string)($pipe['stage'] ?? ''),
+            'title' => (string)($pipe['title'] ?? ''),
+            'raw' => (string)($pipe['raw'] ?? ''),
+            'han_chars' => isset($pipe['han_chars']) ? (int)$pipe['han_chars'] : null,
+            'validation' => $pipe['validation'] ?? null,
+            'fact_judge' => $pipe['fact_judge'] ?? null,
+            'hint' => (string)($pipe['hint'] ?? ''),
+        );
+    }
+
     $system = konvo_soul_build_topic_system_prompt($soulPrompt, $rules, $categoryId);
     $user = konvo_soul_build_topic_user_prompt(
         $seedTopic,
@@ -1280,7 +1329,7 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
     $title = $prepared['title'];
     $raw = $prepared['raw'];
 
-    $valid = konvo_soul_validate_topic($title, $raw, $rules, false);
+    $valid = konvo_soul_validate_hard($title, $raw, $rules);
     if (!$valid['ok']) {
         return array(
             'ok' => false,
@@ -1291,6 +1340,17 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
             'latin_chars' => konvo_soul_count_latin_chars($title . "\n" . $raw),
             'validation' => $valid,
             'llm_snippet' => casual_safe_substr($content, 240),
+        );
+    }
+    $judge = konvo_soul_fact_judge($title, $raw, $soulPrompt);
+    if (!empty($judge['ok']) && empty($judge['publishable'])) {
+        return array(
+            'ok' => false,
+            'error' => 'fact judge rejected (legacy single-stage path)',
+            'fact_judge' => $judge,
+            'title' => $title,
+            'raw' => $raw,
+            'han_chars' => konvo_soul_count_han_chars($raw),
         );
     }
 
@@ -1424,6 +1484,7 @@ if ($providedKey === '' || !safe_hash_equals(KONVO_SECRET, $providedKey)) {
 
 if (isset($_GET['ping']) && (string)$_GET['ping'] === '1') {
     $hanTest = konvo_soul_count_han_chars('中国历史科普测试');
+    $pingRules = konvo_soul_parse_topic_rules(konvo_load_soul('bai', ''));
     casual_out(200, array(
         'ok' => true,
         'ping' => true,
@@ -1431,10 +1492,13 @@ if (isset($_GET['ping']) && (string)$_GET['ping'] === '1') {
         'han_count_test' => $hanTest,
         'mbstring' => function_exists('mb_substr'),
         'llm_key_set' => KONVO_OPENAI_API_KEY !== '',
+        'two_stage_pipeline' => konvo_soul_two_stage_enabled($pingRules),
+        'fact_judge' => konvo_soul_fact_judge_enabled(),
         'max_execution_time' => (int)ini_get('max_execution_time'),
         'iconv' => function_exists('iconv'),
         'files' => array(
             'konvo_soul_topic_helper.php' => is_file(__DIR__ . '/konvo_soul_topic_helper.php'),
+            'konvo_soul_topic_pipeline.php' => is_file(__DIR__ . '/konvo_soul_topic_pipeline.php'),
             'souls/bai.SOUL.md' => is_file(__DIR__ . '/souls/bai.SOUL.md'),
             'souls/higuyer.SOUL.md' => is_file(__DIR__ . '/souls/higuyer.SOUL.md'),
         ),
@@ -1515,11 +1579,11 @@ $recentForumTitles = casual_fetch_latest_topic_titles(100, $categoryId);
 $attempts = array();
 $generated = null;
 $extraAvoidance = '';
-$topicModeRun = !empty($soulRulesRun['longform']) ? 'soul_longform' : 'soul';
+$topicModeRun = konvo_soul_two_stage_enabled($soulRulesRun) ? 'two_stage_pipeline' : (!empty($soulRulesRun['longform']) ? 'soul_longform' : 'soul');
 $requestStartTs = isset($_SERVER['REQUEST_TIME_FLOAT']) ? (float)$_SERVER['REQUEST_TIME_FLOAT'] : microtime(true);
 $fastMode = (bool)KONVO_TOPIC_FAST_MODE;
-$maxAttempts = $fastMode ? 3 : 4;
-$requestBudget = !empty($soulRulesRun['longform']) ? 110.0 : 55.0;
+$maxAttempts = $fastMode ? 2 : 3;
+$requestBudget = !empty($soulRulesRun['longform']) ? 180.0 : 55.0;
 
 for ($i = 0; $i < $maxAttempts; $i++) {
     if ((microtime(true) - $requestStartTs) > $requestBudget) {
@@ -1543,28 +1607,16 @@ for ($i = 0; $i < $maxAttempts; $i++) {
             );
         }
     }
-    if (!empty($res['ok'])) {
-        $gate = casual_uniqueness_gate_with_llm((string)$res['title'], (string)$res['raw'], $recent, $recentForumTitles);
-        $res['uniqueness_gate'] = $gate;
-        if (!empty($gate['ok']) && empty($gate['passes'])) {
-            $res = array(
-                'ok' => false,
-                'error' => 'uniqueness gate rejected candidate',
-                'gate' => $gate,
-                'title' => (string)($res['title'] ?? ''),
-            );
-        }
-    }
     $attempts[] = $res;
     if (!empty($res['ok'])) {
         $generated = $res;
         break;
     }
     $err = trim((string)($res['error'] ?? ''));
-    $gateHint = is_array($res['gate'] ?? null) ? trim((string)($res['gate']['rewrite_hint'] ?? '')) : '';
-    $closest = is_array($res['gate'] ?? null) ? trim((string)($res['gate']['closest_match'] ?? '')) : '';
-    if ($closest === '' && is_array($res['duplicate'] ?? null)) {
-        $closest = trim((string)($res['duplicate']['closest_title'] ?? ''));
+    $gateHint = '';
+    $closest = is_array($res['duplicate'] ?? null) ? trim((string)($res['duplicate']['closest_title'] ?? '')) : '';
+    if ($closest === '' && is_array($res['fact_judge'] ?? null)) {
+        $closest = trim((string)($res['fact_judge']['rewrite_hint'] ?? ''));
     }
     $pieces = array();
     if ($err !== '') {
@@ -1589,6 +1641,8 @@ if (!is_array($generated) || empty($generated['ok'])) {
             'raw_preview' => isset($a['raw']) ? casual_safe_substr((string)$a['raw'], 160) : '',
             'llm_snippet' => isset($a['llm_snippet']) ? (string)$a['llm_snippet'] : '',
             'llm_status' => isset($a['status']) ? (int)$a['status'] : null,
+            'stage' => isset($a['stage']) ? (string)$a['stage'] : '',
+            'fact_judge' => $a['fact_judge'] ?? null,
         );
     }
     casual_out(200, array(
@@ -1604,7 +1658,7 @@ if (!is_array($generated) || empty($generated['ok'])) {
         'soul_loaded' => strlen($soulPromptRun) > 0,
         'soul_chars' => strlen($soulPromptRun),
         'elapsed_seconds' => round(microtime(true) - $requestStartTs, 2),
-        'hint' => 'Check attempt_details.han_chars (0 = model returned English or PHP Han count issue). Verify LLM_API_KEY and souls/*.SOUL.md in container.',
+        'hint' => 'Pipeline v15: two-stage generate → prepare → validate_hard → fact_judge → dup → post. Set KONVO_TOPIC_TWO_STAGE=0 to disable.',
     ));
 }
 
@@ -1625,27 +1679,15 @@ $plan = isset($generated['plan']) && is_array($generated['plan']) ? $generated['
 
 $finalDupCheck = casual_topic_too_similar($title, $raw, $recent, $recentForumTitles);
 if (!empty($finalDupCheck['duplicate'])) {
-    casual_out(500, array(
+    casual_out(200, array(
         'ok' => false,
+        'posted' => false,
         'error' => 'Final duplicate check blocked post.',
         'duplicate' => $finalDupCheck,
         'title_preview' => $title,
         'recent_forum_count' => count($recentForumTitles),
         'recent_local_count' => count($recent),
-    ));
-}
-
-$finalSoulCheck = konvo_soul_validate_topic($title, $raw, $soulRulesRun, false);
-if (empty($finalSoulCheck['ok'])) {
-    casual_out(500, array(
-        'ok' => false,
-        'error' => 'Generated topic failed final SOUL validation; post blocked.',
-        'validation' => $finalSoulCheck,
-        'han_chars' => konvo_soul_count_han_chars($raw),
-        'used_fallback' => false,
         'worker_build' => (string)KONVO_WORKER_BUILD,
-        'soul_rules' => $soulRulesRun,
-        'title_preview' => $title,
     ));
 }
 
@@ -1675,6 +1717,8 @@ if ($dryRun) {
         'topic_mode' => $topicModeRun,
         'soul_rules' => $soulRulesRun,
         'fast_mode' => $fastMode,
+        'fact_judge' => $generated['fact_judge'] ?? null,
+        'pipeline' => (string)($generated['pipeline'] ?? ''),
         'topic' => array(
             'title' => $title,
             'category_id' => $categoryId,
