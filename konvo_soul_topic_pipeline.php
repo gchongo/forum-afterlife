@@ -569,25 +569,28 @@ function konvo_soul_topic_pipeline_generate(
     }
 
     // --- P3 fact judge ---
-    $judge = konvo_soul_fact_judge($title, $raw, $soulPrompt);
-    if (!empty($judge['ok']) && empty($judge['publishable'])) {
-        $hint = trim((string)($judge['rewrite_hint'] ?? ''));
-        $issues = is_array($judge['issues'] ?? null) ? implode('; ', $judge['issues']) : '';
-        return array(
-            'ok' => false,
-            'stage' => 'fact_judge',
-            'error' => 'fact judge rejected (科普不允许瞎编或不可信断言)',
-            'fact_judge' => $judge,
-            'title' => $title,
-            'raw' => $raw,
-            'han_chars' => konvo_soul_count_han_chars($raw),
-            'hint' => $hint !== '' ? $hint : $issues,
-        );
+    $judge = array('ok' => true, 'publishable' => true, 'reason' => 'skipped');
+    if (konvo_soul_should_run_fact_judge($rules)) {
+        $judge = konvo_soul_fact_judge($title, $raw, $soulPrompt);
+        if (!empty($judge['ok']) && empty($judge['publishable'])) {
+            $hint = trim((string)($judge['rewrite_hint'] ?? ''));
+            $issues = is_array($judge['issues'] ?? null) ? implode('; ', $judge['issues']) : '';
+            return array(
+                'ok' => false,
+                'stage' => 'fact_judge',
+                'error' => 'fact judge rejected (科普不允许瞎编或不可信断言)',
+                'fact_judge' => $judge,
+                'title' => $title,
+                'raw' => $raw,
+                'han_chars' => konvo_soul_count_han_chars($raw),
+                'hint' => $hint !== '' ? $hint : $issues,
+            );
+        }
     }
 
     return array(
         'ok' => true,
-        'pipeline' => 'two_stage_v15.4',
+        'pipeline' => 'two_stage_v15.5',
         'repaired' => !empty($repair['repaired']),
         'humanized' => !empty($humanize['humanized']),
         'title' => $title,

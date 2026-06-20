@@ -10,8 +10,8 @@
 
 declare(strict_types=1);
 
-@set_time_limit(120);
-@ini_set('max_execution_time', '120');
+@set_time_limit(400);
+@ini_set('max_execution_time', '400');
 @ignore_user_abort(true);
 
 require_once __DIR__ . '/konvo_soul_helper.php';
@@ -34,7 +34,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-pipeline-v15.4');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-pipeline-v15.5');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -1218,11 +1218,15 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
 {
     $soulPrompt = konvo_soul_prompt_for_topic($bot);
     $rules = konvo_soul_parse_topic_rules($soulPrompt);
+    $rules = konvo_soul_apply_bot_topic_rules($rules, $bot, $categoryId);
     $recentHints = casual_recent_hint_lines($recent);
     $recentOpeningHints = casual_recent_opening_stems($recent, 14);
     $laneKey = strtolower(trim((string)($lane['key'] ?? 'general')));
     $seedPool = konvo_soul_default_seed_pool($soulPrompt, $rules);
-    $seedTopic = casual_pick_random_seed_topic($recent, $recentForumTitles, $seedPool);
+    $seedOverride = trim((string)($_GET['seed_topic'] ?? ''));
+    $seedTopic = $seedOverride !== ''
+        ? $seedOverride
+        : casual_pick_random_seed_topic($recent, $recentForumTitles, $seedPool);
 
     if (konvo_soul_two_stage_enabled($rules)) {
         $pipe = konvo_soul_topic_pipeline_generate(
@@ -1346,8 +1350,11 @@ function casual_generate_with_llm(array $bot, string $signature, array $recent, 
             'llm_snippet' => casual_safe_substr($content, 240),
         );
     }
-    $judge = konvo_soul_fact_judge($title, $raw, $soulPrompt);
-    if (!empty($judge['ok']) && empty($judge['publishable'])) {
+    $judge = array('ok' => true, 'publishable' => true, 'reason' => 'skipped');
+    if (konvo_soul_should_run_fact_judge($rules)) {
+        $judge = konvo_soul_fact_judge($title, $raw, $soulPrompt);
+    }
+    if (konvo_soul_should_run_fact_judge($rules) && !empty($judge['ok']) && empty($judge['publishable'])) {
         return array(
             'ok' => false,
             'error' => 'fact judge rejected (legacy single-stage path)',
@@ -1548,6 +1555,7 @@ $categoryId = casual_pick_category_id_for_lane($lane);
 $bot = casual_bot_for_category($categoryId, $bots);
 $soulPromptRun = konvo_soul_prompt_for_topic($bot);
 $soulRulesRun = konvo_soul_parse_topic_rules($soulPromptRun);
+$soulRulesRun = konvo_soul_apply_bot_topic_rules($soulRulesRun, $bot, $categoryId);
 $soulKeyRun = trim((string)($bot['soul_key'] ?? strtolower((string)($bot['username'] ?? ''))));
 $soulPathRun = __DIR__ . '/souls/' . konvo_normalize_soul_key($soulKeyRun) . '.SOUL.md';
 if (strlen(trim($soulPromptRun)) < 80) {
@@ -1584,11 +1592,15 @@ $recentForumTitles = casual_fetch_latest_topic_titles(100, $categoryId);
 $attempts = array();
 $generated = null;
 $extraAvoidance = '';
-$topicModeRun = konvo_soul_two_stage_enabled($soulRulesRun) ? 'two_stage_pipeline' : (!empty($soulRulesRun['longform']) ? 'soul_longform' : 'soul');
+$topicModeRun = !empty($soulRulesRun['news_bulletin'])
+    ? 'news_bulletin'
+    : (konvo_soul_two_stage_enabled($soulRulesRun) ? 'two_stage_pipeline' : (!empty($soulRulesRun['longform']) ? 'soul_longform' : 'soul'));
 $requestStartTs = isset($_SERVER['REQUEST_TIME_FLOAT']) ? (float)$_SERVER['REQUEST_TIME_FLOAT'] : microtime(true);
 $fastMode = (bool)KONVO_TOPIC_FAST_MODE;
 $maxAttempts = $fastMode ? 2 : 3;
-$requestBudget = !empty($soulRulesRun['longform']) ? 360.0 : 55.0;
+$requestBudget = !empty($soulRulesRun['news_bulletin'])
+    ? 95.0
+    : (!empty($soulRulesRun['longform']) ? 360.0 : 55.0);
 
 for ($i = 0; $i < $maxAttempts; $i++) {
     if ((microtime(true) - $requestStartTs) > $requestBudget) {
@@ -1654,16 +1666,24 @@ if (!is_array($generated) || empty($generated['ok'])) {
         'ok' => false,
         'posted' => false,
         'error' => 'Failed to generate a unique SOUL-compliant topic; nothing was posted.',
+        'primary_error' => isset($errors[0]) ? (string)$errors[0] : '',
         'attempt_errors' => $errors,
         'attempt_details' => $attemptDetails,
         'attempt_count' => count($attempts),
         'fast_mode' => $fastMode,
         'worker_build' => (string)KONVO_WORKER_BUILD,
+        'bot' => array(
+            'username' => (string)($bot['username'] ?? ''),
+            'category_id' => $categoryId,
+        ),
+        'topic_mode' => $topicModeRun,
         'soul_rules' => $soulRulesRun,
         'soul_loaded' => strlen($soulPromptRun) > 0,
         'soul_chars' => strlen($soulPromptRun),
         'elapsed_seconds' => round(microtime(true) - $requestStartTs, 2),
-        'hint' => 'Pipeline v15: two-stage generate → prepare → validate_hard → fact_judge → dup → post. Set KONVO_TOPIC_TWO_STAGE=0 to disable.',
+        'hint' => !empty($soulRulesRun['news_bulletin'])
+            ? 'News bulletin mode: single-shot 号外, no 500-char pipeline. Check primary_error. Optional: &seed_topic=今日某新闻标题'
+            : 'Pipeline v15: two-stage generate → prepare → validate_hard → fact_judge → dup → post. Set KONVO_TOPIC_TWO_STAGE=0 to disable.',
     ));
 }
 

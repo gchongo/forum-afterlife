@@ -104,6 +104,7 @@ function konvo_soul_parse_topic_rules(string $soulRaw): array
         'question_ending' => false,
         'use_markdown' => false,
         'allow_code_blocks' => false,
+        'news_bulletin' => false,
     );
 
     if ($soul === '') {
@@ -137,7 +138,7 @@ function konvo_soul_parse_topic_rules(string $soulRaw): array
         $rules['question_ending'] = true;
     }
 
-    if (preg_match('/科普/u', $soul)) {
+    if (preg_match('/科普/u', $soul) && !konvo_soul_is_news_bulletin_soul($soul)) {
         $rules['longform'] = true;
         if ($rules['min_han_chars'] < 500 && preg_match('/500/u', $soul)) {
             $rules['min_han_chars'] = 500;
@@ -182,7 +183,59 @@ function konvo_soul_parse_topic_rules(string $soulRaw): array
         }
     }
 
+    if (konvo_soul_is_news_bulletin_soul($soul)) {
+        $rules = array_merge($rules, konvo_soul_news_bulletin_rules_patch());
+    }
+
     return $rules;
+}
+
+function konvo_soul_news_bulletin_rules_patch(): array
+{
+    return array(
+        'longform' => false,
+        'news_bulletin' => true,
+        'language' => 'zh',
+        'min_han_chars' => 0,
+        'min_paragraphs' => 0,
+        'max_paragraphs' => 0,
+        'min_body_chars' => 60,
+        'max_body_len' => 2800,
+        'max_title_len' => 100,
+        'statement_ending' => false,
+    );
+}
+
+function konvo_soul_apply_bot_topic_rules(array $rules, array $bot, int $categoryId = 0): array
+{
+    $key = strtolower(trim((string)($bot['soul_key'] ?? '')));
+    $user = strtolower(trim((string)($bot['username'] ?? '')));
+    $newsCategoryId = (int)(getenv('KONVO_NEWS_CATEGORY_ID') ?: 6);
+    if ($categoryId === $newsCategoryId || in_array($key, array('kokoji'), true) || in_array($user, array('kokoji'), true)) {
+        return array_merge($rules, konvo_soul_news_bulletin_rules_patch());
+    }
+    return $rules;
+}
+
+function konvo_soul_should_run_fact_judge(array $rules): bool
+{
+    if (!empty($rules['news_bulletin'])) {
+        return false;
+    }
+    $env = strtolower(trim((string)getenv('KONVO_TOPIC_FACT_JUDGE')));
+    if ($env === '') {
+        return true;
+    }
+    return in_array($env, array('1', 'true', 'yes', 'on'), true);
+}
+
+function konvo_soul_is_news_bulletin_soul(string $soulRaw): bool
+{
+    $soulRaw = konvo_soul_sanitize_utf8(trim($soulRaw));
+    if ($soulRaw === '') {
+        return false;
+    }
+    return (bool)preg_match('/(?:每日号外|新闻号外|kokoji|新闻热点号外|体裁锁定.*新闻|不是科普)/ui', $soulRaw);
 }
 
 function konvo_soul_topic_llm_timeout(array $rules): int
@@ -192,11 +245,27 @@ function konvo_soul_topic_llm_timeout(array $rules): int
     if (!empty($rules['longform'])) {
         return 120;
     }
+    if (!empty($rules['news_bulletin'])) {
+        return 60;
+    }
     return $fastMode ? 28 : 22;
 }
 
 function konvo_soul_default_seed_pool(string $soulRaw, array $rules): array
 {
+    if (konvo_soul_is_news_bulletin_soul($soulRaw)) {
+        return array(
+            '今日国内一则值得跟进的政策或经济动态号外',
+            '今日国际地缘或外交一则公开报道号外',
+            '今日科技产业一条热议新闻号外',
+            '今日金融市场或大宗商品一则波动号外',
+            '今日社会公共事件一则报道梳理号外',
+            '今日文化体育领域一则热点号外',
+            '近期网络热议话题的事实梳理与号外评论',
+            '今日东亚地区一则时事号外',
+            '今日欧美市场隔夜几则动态号外',
+        );
+    }
     if ($rules['language'] === 'zh' || preg_match('/历史/u', $soulRaw)) {
         if (preg_match('/历史/u', $soulRaw)) {
             return array(
@@ -279,7 +348,11 @@ function konvo_soul_build_topic_system_prompt(string $soulPrompt, array $rules, 
     $parts[] = '只返回 JSON，结构为：'
         . '{"plan_mood":"...","plan_angle":"...","plan_posting_intent":"...","plan_lane":"...","title":"...","raw":"..."}。';
     $parts[] = 'SOUL 中的所有语言、长度、结构、风格、禁区、准确性规则，优先于任何默认行为。';
-    $parts[] = '若 SOUL 要求中文科普长文，则 title 与 raw 必须中文，raw 必须超过 500 个中文字符，且 3 到 6 段。';
+    if (!empty($rules['news_bulletin'])) {
+        $parts[] = '【号外模式】写今日/近日新闻热点号外，不是科普、不是地理教科书。篇幅灵活，无 500 字要求。';
+    } elseif ($isZh && !empty($rules['longform'])) {
+        $parts[] = '若 SOUL 要求中文科普长文，则 title 与 raw 必须中文，raw 必须超过 500 个中文字符，且 3 到 6 段。';
+    }
     if ($isZh) {
         $parts[] = '【语言锁定】title 与 raw 必须全部使用简体中文书写，禁止英文正文或英文标题。'
             . 'plan_* 字段可简短英文，但 title/raw 不得出现英文句子。';
@@ -340,8 +413,10 @@ function konvo_soul_human_voice_rules(string $tone = 'any'): string
         $lines[] = '历史帖：克制、具体，像爱读史书的论坛网友，不要演讲腔，不要「历史告诉我们」式说教。';
     } elseif ($tone === 'casual') {
         $lines[] = '畅聊帖：轻松自然，像认真聊天的网友，可有一点个人观察语气，但不要油、不要段子体。';
-    } elseif ($tone === 'geography') {
+    } else    if ($tone === 'geography') {
         $lines[] = '地理帖：像爱看地图又爱出门的论坛网友，具体、克制，不要旅游广告腔，不要教科书式定义堆砌。';
+    } elseif ($tone === 'news') {
+        $lines[] = '号外帖：像转述今日新闻的论坛网友；先事实后评论，不要科普、不要地理教科书、不要港口城市原理课。';
     }
     return implode("\n", $lines);
 }
@@ -360,6 +435,9 @@ function konvo_soul_infer_voice_tone(string $soulPrompt): string
     }
     if (preg_match('/地理/u', $blob) && preg_match('/Enjoylife|地理分类/u', $blob)) {
         return 'geography';
+    }
+    if (konvo_soul_is_news_bulletin_soul($blob)) {
+        return 'news';
     }
     return 'any';
 }
@@ -462,6 +540,9 @@ function konvo_soul_build_topic_user_prompt(
     $lines = array();
     $lines[] = "参考主题（可改写、可忽略，但必须符合 SOUL 的话题范围）：{$seedTopic}";
     $lines[] = '请严格按 SOUL 生成一篇可发帖的话题内容。';
+    if (!empty($rules['news_bulletin'])) {
+        $lines[] = '【号外】必须写新闻热点号外：先事实后评论；禁止港口地理、科普教科书、冷知识体。';
+    }
     $lines[] = '本篇开头方式：' . konvo_soul_pick_opening_style() . '。';
     $lines[] = '标题必须是具体名词短语，不得使用「关于…大家有什么新想法」这类讨论式标题。';
     $lines[] = '禁止套用固定模板；每篇的开头、段落顺序、举例方式都要明显不同。';
@@ -473,7 +554,11 @@ function konvo_soul_build_topic_user_prompt(
         $lines[] = "避免复用这些开头：\n{$recentOpeningHints}";
     }
     if (($rules['language'] ?? 'any') === 'zh') {
-        $lines[] = '【再次强调】title 与 raw 必须全部是简体中文，正文必须超过 520 个汉字（宁长勿短），不得输出英文段落。';
+        if (!empty($rules['news_bulletin'])) {
+            $lines[] = '【再次强调】title 与 raw 必须全部是简体中文；号外新闻体，无最低字数。';
+        } else {
+            $lines[] = '【再次强调】title 与 raw 必须全部是简体中文，正文必须超过 520 个汉字（宁长勿短），不得输出英文段落。';
+        }
     }
     if ($strict) {
         $lines[] = '这是重试，请明显更换切入角度，并更严格地遵守 SOUL。';
