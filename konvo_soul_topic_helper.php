@@ -190,7 +190,7 @@ function konvo_soul_topic_llm_timeout(array $rules): int
     $fastModeEnv = strtolower(trim((string)getenv('KONVO_TOPIC_FAST_MODE')));
     $fastMode = ($fastModeEnv === '' || in_array($fastModeEnv, array('1', 'true', 'yes', 'on'), true));
     if (!empty($rules['longform'])) {
-        return $fastMode ? 90 : 75;
+        return 120;
     }
     return $fastMode ? 28 : 22;
 }

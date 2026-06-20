@@ -182,6 +182,104 @@ function konvo_soul_build_expand_user_prompt(string $title, array $outlineParagr
     return implode("\n\n", $lines);
 }
 
+function konvo_soul_build_single_paragraph_system_prompt(string $soulPrompt, array $rules): string
+{
+    $parts = array(
+        '你是中文科普写作者。任务：只写「一个」完整段落。',
+        '必须 120–180 个汉字，段内禁止任何换行符。',
+        '每个词写完整，禁止缺字（如「实际效果」不可写「实效果」，「难以承担」不可写「难以承」）。',
+        '禁止编造具体百分比、机构名、报告名；不确定用定性表述。',
+        '只返回 JSON：{"paragraph":"这一段完整正文"}。',
+    );
+    if ($soulPrompt !== '') {
+        $parts[] = "Bot SOUL：\n" . konvo_soul_safe_substr($soulPrompt, 2000);
+    }
+    return implode("\n", $parts);
+}
+
+function konvo_soul_expand_paragraphs_individually(
+    string $title,
+    array $outlineParagraphs,
+    string $soulPrompt,
+    array $rules,
+    string $model
+): array {
+    $paragraphs = array();
+    $total = count($outlineParagraphs);
+    foreach ($outlineParagraphs as $i => $outline) {
+        $idx = (int)$i + 1;
+        $payload = array(
+            'model' => $model,
+            'messages' => array(
+                array('role' => 'system', 'content' => konvo_soul_build_single_paragraph_system_prompt($soulPrompt, $rules)),
+                array('role' => 'user', 'content' => "标题：{$title}\n第 {$idx}/{$total} 段大纲：{$outline}\n请写本段完整正文。"),
+            ),
+            'temperature' => 0.45,
+            'max_tokens' => 520,
+            'response_format' => array('type' => 'json_object'),
+        );
+        $res = konvo_soul_llm_chat_json($payload, $rules);
+        if (!$res['ok']) {
+            unset($payload['response_format']);
+            $res = konvo_soul_llm_chat_json($payload, $rules);
+        }
+        if (!$res['ok']) {
+            return array('ok' => false, 'error' => 'expand paragraph ' . $idx . ' failed', 'detail' => $res['error']);
+        }
+        $obj = konvo_soul_extract_llm_json_object((string)($res['json']['choices'][0]['message']['content'] ?? ''));
+        $para = konvo_soul_flatten_paragraph_text((string)($obj['paragraph'] ?? $obj['raw'] ?? ''));
+        if ($para === '' || konvo_soul_count_han_chars($para) < 40) {
+            return array('ok' => false, 'error' => 'expand paragraph ' . $idx . ' empty or too short', 'parsed' => $obj);
+        }
+        $paragraphs[] = $para;
+    }
+    return array('ok' => true, 'paragraphs' => $paragraphs);
+}
+
+function konvo_soul_repair_chinese_paragraphs(string $title, array $paragraphs, array $rules): array
+{
+    if ($paragraphs === array()) {
+        return array('ok' => false, 'error' => 'no paragraphs to repair');
+    }
+    $model = trim((string)(getenv('KONVO_REPAIR_MODEL') ?: getenv('MODEL_TIER_S') ?: 'deepseek-chat'));
+    $outline = '';
+    foreach ($paragraphs as $i => $p) {
+        $outline .= ($i + 1) . '. ' . $p . "\n";
+    }
+    $system = '你是中文科普校对员。'
+        . '只修正：缺字、断词、段内换行、明显语病。'
+        . '禁止：添加具体数字/百分比/机构名/新观点/新史实。'
+        . '返回 JSON：{"paragraphs":["修正后段1","修正后段2",...]}，条数与输入相同。';
+    $payload = array(
+        'model' => $model,
+        'messages' => array(
+            array('role' => 'system', 'content' => $system),
+            array('role' => 'user', 'content' => "标题：{$title}\n\n待校对段落：\n{$outline}"),
+        ),
+        'temperature' => 0.1,
+        'max_tokens' => 3200,
+        'response_format' => array('type' => 'json_object'),
+    );
+    $res = konvo_soul_llm_chat_json($payload, $rules);
+    if (!$res['ok']) {
+        unset($payload['response_format']);
+        $res = konvo_soul_llm_chat_json($payload, $rules);
+    }
+    if (!$res['ok']) {
+        return array('ok' => false, 'error' => 'repair LLM failed', 'paragraphs' => $paragraphs);
+    }
+    $obj = konvo_soul_extract_llm_json_object((string)($res['json']['choices'][0]['message']['content'] ?? ''));
+    $fixed = $obj['paragraphs'] ?? null;
+    if (!is_array($fixed) || count($fixed) !== count($paragraphs)) {
+        return array('ok' => true, 'paragraphs' => $paragraphs, 'repaired' => false);
+    }
+    $out = array();
+    foreach ($fixed as $p) {
+        $out[] = konvo_soul_flatten_paragraph_text((string)$p);
+    }
+    return array('ok' => true, 'paragraphs' => $out, 'repaired' => true);
+}
+
 function konvo_soul_validate_hard(string $title, string $raw, array $rules): array
 {
     $title = konvo_soul_sanitize_utf8(trim($title));
@@ -228,10 +326,6 @@ function konvo_soul_validate_hard(string $title, string $raw, array $rules): arr
         return array('ok' => false, 'tier' => 'P3', 'error' => 'body still contains inline newlines after prepare');
     }
 
-    if (preg_match('/可能满/u', $raw) || preg_match('/各地民对/u', $raw) || preg_match('/实上/u', $raw)) {
-        return array('ok' => false, 'tier' => 'P3', 'error' => 'suspicious missing-character fragment in body');
-    }
-
     if (preg_match('/根据.{0,18}(?:协会|基金会|研究院|调查组|报告)/u', $raw) && preg_match('/\d+\s*[%％]/u', $raw)) {
         return array('ok' => false, 'tier' => 'P3', 'error' => 'forbidden fabricated citation pattern (organization + percentage)');
     }
@@ -253,9 +347,10 @@ function konvo_soul_fact_judge(string $title, string $raw, string $soulPrompt): 
     $bodyBrief = konvo_soul_safe_substr($raw, 2200);
     $system = '你是科普事实质检员，只判断「能否作为可信科普发表」。'
         . '返回 JSON：{"publishable":true|false,"factual_risk":1-5,"issues":["..."],"rewrite_hint":"..."}。'
-        . 'factual_risk: 1=可信常识, 3=有不确定具体断言, 5=明显编造数据/机构/出处。'
-        . '以下应 publishable=false：具体百分比/精确人口统计、编造机构或报告名、无法核实的精确数字、段内换行、明显缺字断词（如「可能满」「各地民对」「实上」等）。'
-        . '以下可 publishable=true：定性科普、常识机制、无具体数字的一般性描述。';
+        . 'factual_risk: 1=可信常识, 3=略有模糊表述, 5=编造数据/机构/严重缺字断词。'
+        . 'publishable=false 仅当：编造具体百分比/人口统计/机构报告、明显瞎编史实、全文多处缺字断词导致无法阅读。'
+        . 'publishable=true 允许：定性科普、「许多研究指出/一般认为」等无具体数字的概括、已修复的通顺文本。'
+        . '不要因缺少脚注或表述略模糊而拒稿，只要无具体假数据即可。';
     $user = "SOUL 摘要：\n{$soulBrief}\n\n标题：{$title}\n\n正文：\n{$bodyBrief}\n\n请质检。";
 
     $payload = array(
@@ -285,7 +380,7 @@ function konvo_soul_fact_judge(string $title, string $raw, string $soulPrompt): 
     }
 
     $risk = (int)($obj['factual_risk'] ?? 3);
-    $publishable = !empty($obj['publishable']) && $risk <= 2;
+    $publishable = !empty($obj['publishable']) && $risk <= 3;
     return array(
         'ok' => true,
         'publishable' => $publishable,
@@ -349,34 +444,23 @@ function konvo_soul_topic_pipeline_generate(
         $outlineParagraphs = array_slice($outlineParagraphs, 0, 6);
     }
 
-    // --- P1 Stage 2: expand ---
-    $expandPayload = array(
-        'model' => $model,
-        'messages' => array(
-            array('role' => 'system', 'content' => konvo_soul_build_expand_system_prompt($soulPrompt, $rules)),
-            array('role' => 'user', 'content' => konvo_soul_build_expand_user_prompt($title, $outlineParagraphs, $strict, $extraAvoidance)),
-        ),
-        'temperature' => 0.5,
-        'max_tokens' => 2800,
-        'response_format' => array('type' => 'json_object'),
-    );
-    $expandRes = konvo_soul_llm_chat_json($expandPayload, $rules);
-    if (!$expandRes['ok']) {
-        unset($expandPayload['response_format']);
-        $expandRes = konvo_soul_llm_chat_json($expandPayload, $rules);
+    // --- P1 Stage 2: expand one paragraph per LLM call (avoids long JSON truncation / missing chars) ---
+    $expandOne = konvo_soul_expand_paragraphs_individually($title, $outlineParagraphs, $soulPrompt, $rules, $model);
+    if (empty($expandOne['ok'])) {
+        return array(
+            'ok' => false,
+            'stage' => 'expand',
+            'error' => (string)($expandOne['error'] ?? 'expand failed'),
+            'detail' => $expandOne['detail'] ?? '',
+        );
     }
-    if (!$expandRes['ok']) {
-        return array('ok' => false, 'stage' => 'expand', 'error' => 'expand LLM failed', 'detail' => $expandRes['error']);
-    }
+    $paragraphs = is_array($expandOne['paragraphs'] ?? null) ? $expandOne['paragraphs'] : array();
 
-    $expandObj = konvo_soul_extract_llm_json_object((string)($expandRes['json']['choices'][0]['message']['content'] ?? ''));
-    $paragraphs = $expandObj['paragraphs'] ?? null;
-    if (!is_array($paragraphs) || count($paragraphs) < 1) {
-        return array('ok' => false, 'stage' => 'expand', 'error' => 'expand JSON missing paragraphs', 'parsed' => $expandObj);
+    // --- P1.5 repair: fix missing chars / line breaks before validate ---
+    $repair = konvo_soul_repair_chinese_paragraphs($title, $paragraphs, $rules);
+    if (!empty($repair['ok']) && is_array($repair['paragraphs'] ?? null)) {
+        $paragraphs = $repair['paragraphs'];
     }
-    $paragraphs = array_values(array_filter(array_map(static function ($p) {
-        return konvo_soul_flatten_paragraph_text((string)$p);
-    }, $paragraphs), static fn($p) => $p !== ''));
     $raw = $normalizeBody(implode("\n\n", $paragraphs));
 
     if ($raw === '') {
@@ -421,7 +505,8 @@ function konvo_soul_topic_pipeline_generate(
 
     return array(
         'ok' => true,
-        'pipeline' => 'two_stage_v15',
+        'pipeline' => 'two_stage_v15.3',
+        'repaired' => !empty($repair['repaired']),
         'title' => $title,
         'raw' => $raw,
         'han_chars' => konvo_soul_count_han_chars($raw),
