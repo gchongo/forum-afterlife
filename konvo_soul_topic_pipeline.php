@@ -149,7 +149,8 @@ function konvo_soul_build_expand_system_prompt(string $soulPrompt, array $rules)
     $parts = array(
         '你是中文科普写作者。根据给定大纲，把每条 outline 扩写成完整段落。',
         '【事实纪律·最高优先级】禁止编造：具体百分比、精确统计、机构/报告/调查名称、假引用。不确定就改写为定性表述或删除该句。',
-        '每个词必须写完整，禁止缺字、断词；禁止段内换行。',
+        '每个词必须完整，禁止缺字（如「可能充满」不能写「可能满」，「各地民众」不能写「各地民」）。',
+        'paragraphs 数组中每个字符串内部禁止出现任何换行符 \\n；一段=一行 JSON 字符串。',
         '只返回 JSON：{"paragraphs":["第一段完整正文","第二段完整正文",...]}。',
         'paragraphs 条数必须与大纲一致；合并后全文汉字不少于 ' . $minHan . ' 字。',
         '全文不得出现问号（？或?）；结尾必须是陈述句，不得互动式收束。',
@@ -223,6 +224,14 @@ function konvo_soul_validate_hard(string $title, string $raw, array $rules): arr
         return array('ok' => false, 'tier' => 'P3', 'error' => 'content matches forbidden boilerplate template');
     }
 
+    if (konvo_soul_body_has_inline_newlines($raw)) {
+        return array('ok' => false, 'tier' => 'P3', 'error' => 'body still contains inline newlines after prepare');
+    }
+
+    if (preg_match('/可能满/u', $raw) || preg_match('/各地民对/u', $raw) || preg_match('/实上/u', $raw)) {
+        return array('ok' => false, 'tier' => 'P3', 'error' => 'suspicious missing-character fragment in body');
+    }
+
     if (preg_match('/根据.{0,18}(?:协会|基金会|研究院|调查组|报告)/u', $raw) && preg_match('/\d+\s*[%％]/u', $raw)) {
         return array('ok' => false, 'tier' => 'P3', 'error' => 'forbidden fabricated citation pattern (organization + percentage)');
     }
@@ -245,7 +254,7 @@ function konvo_soul_fact_judge(string $title, string $raw, string $soulPrompt): 
     $system = '你是科普事实质检员，只判断「能否作为可信科普发表」。'
         . '返回 JSON：{"publishable":true|false,"factual_risk":1-5,"issues":["..."],"rewrite_hint":"..."}。'
         . 'factual_risk: 1=可信常识, 3=有不确定具体断言, 5=明显编造数据/机构/出处。'
-        . '以下应 publishable=false：具体百分比/精确人口统计、编造机构或报告名、无法核实的精确数字、明显断词缺字。'
+        . '以下应 publishable=false：具体百分比/精确人口统计、编造机构或报告名、无法核实的精确数字、段内换行、明显缺字断词（如「可能满」「各地民对」「实上」等）。'
         . '以下可 publishable=true：定性科普、常识机制、无具体数字的一般性描述。';
     $user = "SOUL 摘要：\n{$soulBrief}\n\n标题：{$title}\n\n正文：\n{$bodyBrief}\n\n请质检。";
 
@@ -365,7 +374,9 @@ function konvo_soul_topic_pipeline_generate(
     if (!is_array($paragraphs) || count($paragraphs) < 1) {
         return array('ok' => false, 'stage' => 'expand', 'error' => 'expand JSON missing paragraphs', 'parsed' => $expandObj);
     }
-    $paragraphs = array_values(array_filter(array_map(static fn($p) => trim((string)$p), $paragraphs), static fn($p) => $p !== ''));
+    $paragraphs = array_values(array_filter(array_map(static function ($p) {
+        return konvo_soul_flatten_paragraph_text((string)$p);
+    }, $paragraphs), static fn($p) => $p !== ''));
     $raw = $normalizeBody(implode("\n\n", $paragraphs));
 
     if ($raw === '') {

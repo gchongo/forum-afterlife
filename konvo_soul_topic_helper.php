@@ -407,6 +407,14 @@ function konvo_soul_count_paragraphs(string $raw): int
     return max(1, $count);
 }
 
+function konvo_soul_flatten_paragraph_text(string $text): string
+{
+    $text = konvo_soul_sanitize_utf8(str_replace(array("\r\n", "\r"), "\n", $text));
+    $text = preg_replace('/\s*\n+\s*/u', '', $text) ?? $text;
+    $text = preg_replace('/[ \t\x{00A0}]+/u', '', $text) ?? $text;
+    return trim($text);
+}
+
 function konvo_soul_fix_inline_newlines(string $raw): string
 {
     $raw = konvo_soul_sanitize_utf8(str_replace(array("\r\n", "\r"), "\n", $raw));
@@ -414,29 +422,37 @@ function konvo_soul_fix_inline_newlines(string $raw): string
     if ($raw === '') {
         return '';
     }
-    // 句号/问号/叹号后的单换行视为段落分隔
+    // 句中的换行（含 \n\n）一律抹平，避免「可能↵↵满」被当成段落
+    $raw = preg_replace('/(?<![。！？!?])\n+/u', '', $raw) ?? $raw;
+    // 仅句末标点后保留段落分隔
     $raw = preg_replace('/([。！？!?])\s*\n\s*(?=[\x{4e00}-\x{9fff}「"（(])/u', "$1\n\n", $raw) ?? $raw;
     $raw = preg_replace('/\n{3,}/', "\n\n", $raw) ?? $raw;
 
     $parts = preg_split('/\n\s*\n/', $raw);
     if (!is_array($parts) || $parts === array()) {
-        $flat = preg_replace('/\s*\n\s*/u', '', $raw) ?? $raw;
-        return trim(preg_replace('/[ \t]{2,}/u', ' ', $flat) ?? $flat);
+        return konvo_soul_flatten_paragraph_text($raw);
     }
 
     $fixed = array();
     foreach ($parts as $part) {
-        $part = trim((string)$part);
-        if ($part === '') {
-            continue;
+        $part = konvo_soul_flatten_paragraph_text((string)$part);
+        if ($part !== '') {
+            $fixed[] = $part;
         }
-        // 段内所有单换行一律去掉（中文科普不需要软换行）
-        $part = preg_replace('/\s*\n\s*/u', '', $part) ?? $part;
-        $part = preg_replace('/[ \t]{2,}/u', ' ', $part) ?? $part;
-        $fixed[] = $part;
     }
 
     return implode("\n\n", $fixed);
+}
+
+function konvo_soul_body_has_inline_newlines(string $raw): bool
+{
+    foreach (preg_split('/\n\s*\n/', trim($raw)) as $block) {
+        $block = trim((string)$block);
+        if ($block !== '' && str_contains($block, "\n")) {
+            return true;
+        }
+    }
+    return (bool)preg_match('/[\x{4e00}-\x{9fff}]\s*\n\s*[\x{4e00}-\x{9fff}]/u', $raw);
 }
 
 function konvo_soul_normalize_paragraphs(string $raw, int $minPara, int $maxPara): string
