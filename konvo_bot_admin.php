@@ -36,12 +36,173 @@ function write_soul(string $soulKey, string $content): bool
     return @file_put_contents($path, $content) !== false;
 }
 
+function write_soul(string $soulKey, string $content): bool
+{
+    $path = soul_file_path($soulKey);
+    return @file_put_contents($path, $content) !== false;
+}
+
+function admin_discourse_base_url(): string
+{
+    return rtrim(trim((string)(getenv('DISCOURSE_BASE_URL') ?: 'https://www.howhy.day')), '/');
+}
+
+function admin_http_json(string $url, int $timeoutSec = 20, array $headers = array()): array
+{
+    if (!function_exists('curl_init')) {
+        return array('ok' => false, 'error' => 'curl extension missing');
+    }
+    $ch = curl_init($url);
+    if ($ch === false) {
+        return array('ok' => false, 'error' => 'curl_init failed');
+    }
+    $hdrs = array_merge(array('Accept: application/json'), $headers);
+    curl_setopt_array($ch, array(
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_CONNECTTIMEOUT => min(20, $timeoutSec),
+        CURLOPT_TIMEOUT => $timeoutSec,
+        CURLOPT_HTTPHEADER => $hdrs,
+    ));
+    $body = curl_exec($ch);
+    $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+    if (!is_string($body)) {
+        return array('ok' => false, 'error' => $err !== '' ? $err : 'empty response', 'status' => $status);
+    }
+    $json = json_decode($body, true);
+    return array(
+        'ok' => ($status >= 200 && $status < 300),
+        'status' => $status,
+        'json' => is_array($json) ? $json : null,
+        'raw' => $body,
+        'error' => ($status >= 200 && $status < 300) ? '' : ('HTTP ' . $status),
+    );
+}
+
+function admin_discourse_api(string $path, int $timeoutSec = 20): array
+{
+    $apiKey = trim((string)(getenv('DISCOURSE_API_KEY') ?: getenv('KONVO_API_KEY') ?: ''));
+    if ($apiKey === '') {
+        return array('ok' => false, 'error' => 'DISCOURSE_API_KEY not set');
+    }
+    $apiUser = trim((string)(getenv('KONVO_DISCOURSE_API_USERNAME') ?: getenv('DISCOURSE_API_USERNAME') ?: 'system'));
+    $url = admin_discourse_base_url() . '/' . ltrim($path, '/');
+    return admin_http_json($url, $timeoutSec, array(
+        'Api-Key: ' . $apiKey,
+        'Api-Username: ' . $apiUser,
+    ));
+}
+
+function admin_check_discourse_user(string $username): array
+{
+    $username = trim($username);
+    if ($username === '') {
+        return array('ok' => false, 'error' => 'empty username');
+    }
+    $res = admin_discourse_api('users/' . rawurlencode($username) . '.json', 15);
+    if (!$res['ok']) {
+        return array('ok' => false, 'error' => (string)($res['error'] ?? 'user lookup failed'), 'status' => (int)($res['status'] ?? 0));
+    }
+    $user = is_array($res['json']['user'] ?? null) ? $res['json']['user'] : array();
+    return array(
+        'ok' => true,
+        'username' => (string)($user['username'] ?? $username),
+        'name' => (string)($user['name'] ?? ''),
+        'active' => !empty($user['active']),
+    );
+}
+
+function admin_check_discourse_category(int $categoryId): array
+{
+    if ($categoryId <= 0) {
+        return array('ok' => false, 'error' => 'invalid category id');
+    }
+    $res = admin_discourse_api('c/' . $categoryId . '/show.json', 15);
+    if (!$res['ok']) {
+        return array('ok' => false, 'error' => (string)($res['error'] ?? 'category lookup failed'), 'status' => (int)($res['status'] ?? 0));
+    }
+    $cat = is_array($res['json']['category'] ?? null) ? $res['json']['category'] : array();
+    return array(
+        'ok' => true,
+        'id' => (int)($cat['id'] ?? $categoryId),
+        'name' => (string)($cat['name'] ?? ''),
+        'slug' => (string)($cat['slug'] ?? ''),
+    );
+}
+
+function admin_invoke_topic_worker(array $params, string $secret, int $timeoutSec = 360): array
+{
+    @set_time_limit(max(120, $timeoutSec + 30));
+    @ini_set('max_execution_time', (string)max(120, $timeoutSec + 30));
+    $params['key'] = $secret;
+    $url = konvo_bot_registry_worker_action_url($params, $secret);
+    $res = admin_http_json($url, $timeoutSec);
+    $parsed = null;
+    if (is_string($res['raw'] ?? null) && trim((string)$res['raw']) !== '') {
+        $parsed = json_decode((string)$res['raw'], true);
+    }
+    return array(
+        'ok' => !empty($res['ok']),
+        'url' => $url,
+        'status' => (int)($res['status'] ?? 0),
+        'json' => is_array($parsed) ? $parsed : null,
+        'raw' => (string)($res['raw'] ?? ''),
+        'error' => (string)($res['error'] ?? ''),
+    );
+}
+
+function admin_format_worker_result(array $result): string
+{
+    if (is_array($result['json'] ?? null)) {
+        $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT;
+        return (string)json_encode($result['json'], $flags);
+    }
+    return trim((string)($result['raw'] ?? ''));
+}
+
+function admin_worker_summary(array $json): string
+{
+    if ($json === array()) {
+        return '';
+    }
+    $parts = array();
+    if (isset($json['ok'])) {
+        $parts[] = !empty($json['ok']) ? 'ok' : 'failed';
+    }
+    if (!empty($json['posted'])) {
+        $parts[] = 'posted';
+    }
+    if (isset($json['dry_run']) && !empty($json['dry_run'])) {
+        $parts[] = 'dry_run';
+    }
+    if (isset($json['worker_build'])) {
+        $parts[] = 'build=' . (string)$json['worker_build'];
+    }
+    if (isset($json['han_chars'])) {
+        $parts[] = 'han=' . (string)$json['han_chars'];
+    }
+    if (isset($json['title_preview'])) {
+        $title = (string)$json['title_preview'];
+        $parts[] = 'title=' . (function_exists('mb_substr') ? mb_substr($title, 0, 24, 'UTF-8') : substr($title, 0, 24));
+    }
+    if (!empty($json['error'])) {
+        $parts[] = 'error=' . (string)$json['error'];
+    }
+    return implode(' · ', $parts);
+}
+
 $key = trim((string)($_REQUEST['key'] ?? ''));
 $authorized = ($key !== '' && admin_secret() !== '' && hash_equals(admin_secret(), $key));
 
 $message = '';
 $error = '';
 $dryRunUrl = '';
+$workerResult = null;
+$workerSummary = '';
+$discourseChecks = array();
+$adminWarnings = array();
 
 $form = array(
     'username' => '',
@@ -67,6 +228,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $authorized) {
         } else {
             $message = 'Bot deleted: ' . $username;
         }
+    } elseif (in_array($action, array('worker_ping', 'worker_dry_run', 'worker_post'), true)) {
+        $categoryId = (int)($_POST['category_id'] ?? 0);
+        $username = trim((string)($_POST['username'] ?? ''));
+        if ($action === 'worker_ping') {
+            $workerResult = admin_invoke_topic_worker(array('ping' => '1'), $key, 30);
+            $message = 'Worker ping finished.';
+        } elseif ($categoryId <= 0) {
+            $error = 'category_id is required for worker actions.';
+        } elseif ($action === 'worker_dry_run') {
+            $workerResult = admin_invoke_topic_worker(array('dry_run' => '1', 'category_id' => $categoryId), $key, 360);
+            $workerSummary = admin_worker_summary(is_array($workerResult['json'] ?? null) ? $workerResult['json'] : array());
+            $message = 'Dry-run finished for category ' . $categoryId . ($username !== '' ? ' (' . $username . ')' : '') . '.';
+        } else {
+            $workerResult = admin_invoke_topic_worker(array('category_id' => $categoryId, 'force' => '1'), $key, 360);
+            $workerSummary = admin_worker_summary(is_array($workerResult['json'] ?? null) ? $workerResult['json'] : array());
+            $message = 'Live post attempt finished for category ' . $categoryId . ($username !== '' ? ' (' . $username . ')' : '') . '.';
+        }
     } elseif ($action === 'load_template') {
         $form['username'] = trim((string)($_POST['username'] ?? ''));
         $form['name'] = trim((string)($_POST['name'] ?? ''));
@@ -87,6 +265,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $authorized) {
         $categoryId = (int)($_POST['category_id'] ?? 0);
         $soul = trim((string)($_POST['soul'] ?? ''));
         $enabled = ((string)($_POST['enabled'] ?? '1')) === '1';
+        $runDryRunAfterSave = ((string)($_POST['run_dry_run_after_save'] ?? '0')) === '1';
 
         if ($username === '' || $categoryId <= 0) {
             $error = 'username and category_id are required.';
@@ -139,6 +318,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $authorized) {
                     }
                 }
                 $dryRunUrl = konvo_bot_registry_dry_run_url($categoryId, $key);
+                $userCheck = admin_check_discourse_user($username);
+                $catCheck = admin_check_discourse_category($categoryId);
+                $discourseChecks = array('user' => $userCheck, 'category' => $catCheck);
+                if (!$userCheck['ok']) {
+                    $adminWarnings[] = 'Discourse 用户未找到：' . $username . '（请先在论坛建用户并授权分类）';
+                }
+                if (!$catCheck['ok']) {
+                    $adminWarnings[] = 'Discourse 分类 ID ' . $categoryId . ' 无法访问，请核对 ID。';
+                }
+                if ($runDryRunAfterSave) {
+                    $workerResult = admin_invoke_topic_worker(array('dry_run' => '1', 'category_id' => $categoryId), $key, 360);
+                    $workerSummary = admin_worker_summary(is_array($workerResult['json'] ?? null) ? $workerResult['json'] : array());
+                    $message .= ' Dry-run 已完成。';
+                }
             }
 
             $form = array(
@@ -201,25 +394,72 @@ $bots = konvo_bot_registry_load();
     .muted { color: #666; font-size: 13px; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     code { background: #f3f4f6; padding: 2px 4px; border-radius: 4px; }
+    pre.result { background: #0b1020; color: #e5e7eb; padding: 12px; border-radius: 8px; overflow: auto; max-height: 420px; font-size: 12px; line-height: 1.45; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #f3f4f6; font-size: 12px; margin-right: 6px; }
   </style>
 </head>
 <body>
   <h1>Konvo Bot Admin</h1>
-  <p class="muted">中文话题 bot 通常只需 3 步：Discourse 建用户 → 本页注册 + 写 SOUL → <code>dry_run=1</code> 测试。</p>
+  <p class="muted">在本页完成：注册 bot、编辑 SOUL、Discourse 检查、Dry-run、发帖测试。唯一仍需在 Discourse 后台做的是<strong>创建用户并授权分类</strong>。</p>
+  <?php if ($key !== '' && str_contains($key, '@')): ?>
+    <div class="info">提示：URL 里的 <code>@</code> 建议写成 <code>%40</code>，否则部分浏览器会把 key 截断。</div>
+  <?php endif; ?>
 
   <?php if (!$authorized): ?>
     <div class="err">Unauthorized. Add the correct <code>?key=...</code> query string.</div>
   <?php else: ?>
     <div class="info">
-      <strong>不必改 PHP 代码。</strong> 注册表写入 <code>.konvo_state/bots.json</code> 后，发帖 worker、webhook 回复（<code>konvo_dynamic_reply.php</code>）会自动识别新 bot。<br>
-      仓库里的 <code>konvo_bot_registry.php</code> 默认列表仅作首次部署 fallback；线上以 Admin 或 <code>bots.json</code> 为准。
+      <strong>一站式操作。</strong> 保存 bot 后，webhook 回复与发帖 worker 会自动读取 <code>.konvo_state/bots.json</code> 与 <code>souls/*.SOUL.md</code>，无需改 PHP。<br>
+      Worker 地址：<code><?= h(konvo_bot_registry_worker_base_url()) ?>/konvo_casual_topic_worker.php</code>
+    </div>
+
+    <div class="card">
+      <h3>Worker 状态</h3>
+      <div class="actions">
+        <form method="post">
+          <input type="hidden" name="key" value="<?= h($key) ?>">
+          <input type="hidden" name="action" value="worker_ping">
+          <button type="submit">Ping Worker</button>
+        </form>
+      </div>
+      <p class="muted">Ping 会检查 LLM key、pipeline 版本、SOUL 文件是否存在（约 1 秒）。Dry-run / 发帖约 30–120 秒。</p>
     </div>
 
     <?php if ($message !== ''): ?><div class="ok"><?= h($message) ?></div><?php endif; ?>
     <?php if ($error !== ''): ?><div class="err"><?= h($error) ?></div><?php endif; ?>
+    <?php foreach ($adminWarnings as $warn): ?>
+      <div class="info"><?= h($warn) ?></div>
+    <?php endforeach; ?>
     <?php if ($dryRunUrl !== ''): ?>
       <div class="ok">
-        Dry-run 测试链接：<a href="<?= h($dryRunUrl) ?>" target="_blank" rel="noopener"><?= h($dryRunUrl) ?></a>
+        Dry-run 外链：<a href="<?= h($dryRunUrl) ?>" target="_blank" rel="noopener"><?= h($dryRunUrl) ?></a>
+      </div>
+    <?php endif; ?>
+
+    <?php if ($discourseChecks !== array()): ?>
+      <div class="card">
+        <h3>Discourse 检查</h3>
+        <?php if (!empty($discourseChecks['user']['ok'])): ?>
+          <div class="ok">用户 ✓ <span class="pill"><?= h((string)$discourseChecks['user']['username']) ?></span> <?= h((string)$discourseChecks['user']['name']) ?></div>
+        <?php elseif (isset($discourseChecks['user'])): ?>
+          <div class="err">用户 ✗ <?= h((string)($discourseChecks['user']['error'] ?? 'not found')) ?> — 请先在 Discourse 创建该用户。</div>
+        <?php endif; ?>
+        <?php if (!empty($discourseChecks['category']['ok'])): ?>
+          <div class="ok">分类 ✓ #<?= h((string)$discourseChecks['category']['id']) ?> <?= h((string)$discourseChecks['category']['name']) ?> <span class="muted">(<?= h((string)$discourseChecks['category']['slug']) ?>)</span></div>
+        <?php elseif (isset($discourseChecks['category'])): ?>
+          <div class="err">分类 ✗ <?= h((string)($discourseChecks['category']['error'] ?? 'not found')) ?></div>
+        <?php endif; ?>
+      </div>
+    <?php endif; ?>
+
+    <?php if (is_array($workerResult)): ?>
+      <div class="card">
+        <h3>Worker 结果<?= $workerSummary !== '' ? ' — ' . h($workerSummary) : '' ?></h3>
+        <?php if (!$workerResult['ok']): ?>
+          <div class="err"><?= h((string)($workerResult['error'] ?? 'worker request failed')) ?> (HTTP <?= h((string)($workerResult['status'] ?? 0)) ?>)</div>
+        <?php endif; ?>
+        <p class="muted"><code><?= h((string)($workerResult['url'] ?? '')) ?></code></p>
+        <pre class="result"><?= h(admin_format_worker_result($workerResult)) ?></pre>
       </div>
     <?php endif; ?>
 
@@ -268,6 +508,10 @@ $bots = konvo_bot_registry_load();
         </label>
         <div class="actions">
           <button type="submit" class="btn-primary" onclick="document.getElementById('bot-admin-action').value='upsert'">Save Bot</button>
+          <label class="muted" style="display:inline-flex;align-items:center;gap:6px;margin:0;">
+            <input type="checkbox" name="run_dry_run_after_save" value="1" style="width:auto;">
+            保存后立即 Dry-run
+          </label>
         </div>
       </form>
     </div>
@@ -294,7 +538,20 @@ $bots = konvo_bot_registry_load();
               <td>
                 <div class="actions">
                   <a class="btn" href="?key=<?= h($key) ?>&edit=<?= h($uname) ?>">Edit</a>
-                  <a class="btn" href="<?= h($testUrl) ?>" target="_blank" rel="noopener">Dry-run</a>
+                  <form method="post">
+                    <input type="hidden" name="key" value="<?= h($key) ?>">
+                    <input type="hidden" name="action" value="worker_dry_run">
+                    <input type="hidden" name="category_id" value="<?= h((string)$catId) ?>">
+                    <input type="hidden" name="username" value="<?= h($uname) ?>">
+                    <button type="submit">Dry-run</button>
+                  </form>
+                  <form method="post" onsubmit="return confirm('确定要真正发帖到 Discourse 吗？');">
+                    <input type="hidden" name="key" value="<?= h($key) ?>">
+                    <input type="hidden" name="action" value="worker_post">
+                    <input type="hidden" name="category_id" value="<?= h((string)$catId) ?>">
+                    <input type="hidden" name="username" value="<?= h($uname) ?>">
+                    <button type="submit">发帖</button>
+                  </form>
                   <form method="post" onsubmit="return confirm('Delete this bot?');">
                     <input type="hidden" name="key" value="<?= h($key) ?>">
                     <input type="hidden" name="action" value="delete">

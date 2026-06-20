@@ -203,6 +203,16 @@ function konvo_bot_registry_is_known_username(string $username): bool
 
 function konvo_bot_registry_worker_base_url(): string
 {
+    $host = trim((string)($_SERVER['HTTP_HOST'] ?? ''));
+    if ($host !== '') {
+        $scheme = 'http';
+        if (!empty($_SERVER['HTTPS']) && (string)$_SERVER['HTTPS'] !== 'off') {
+            $scheme = 'https';
+        } elseif (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower((string)$_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https') {
+            $scheme = 'https';
+        }
+        return $scheme . '://' . $host;
+    }
     $url = trim((string)(getenv('KONVO_LOCAL_BASE_URL') ?: getenv('KONVO_BASE_URL') ?: ''));
     if ($url !== '') {
         return rtrim($url, '/');
@@ -212,13 +222,21 @@ function konvo_bot_registry_worker_base_url(): string
 
 function konvo_bot_registry_dry_run_url(int $categoryId, string $secret = ''): string
 {
+    return konvo_bot_registry_worker_action_url(
+        array('dry_run' => '1', 'category_id' => max(0, $categoryId)),
+        $secret
+    );
+}
+
+function konvo_bot_registry_worker_action_url(array $params, string $secret = ''): string
+{
     $base = konvo_bot_registry_worker_base_url();
     $key = trim($secret !== '' ? $secret : (string)getenv('DISCOURSE_WEBHOOK_SECRET'));
-    $q = 'konvo_casual_topic_worker.php?dry_run=1&category_id=' . max(0, $categoryId);
     if ($key !== '') {
-        $q .= '&key=' . rawurlencode($key);
+        $params['key'] = $key;
     }
-    return $base . '/' . $q;
+    $q = http_build_query($params);
+    return $base . '/konvo_casual_topic_worker.php' . ($q !== '' ? '?' . $q : '');
 }
 
 function konvo_bot_registry_soul_template(string $kind, string $username, string $categoryLabel, int $categoryId): string

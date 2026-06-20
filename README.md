@@ -122,16 +122,19 @@ Check JSON fields: `pipeline: two_stage_v15.4`, `humanized: true`, `han_chars >=
 
 ### Adding a Chinese topic bot (3 steps)
 
-You do **not** need to edit PHP for each new bot on a running server.
+Almost everything runs from **`konvo_bot_admin.php?key=YOUR_SECRET`** on your bot host (e.g. `https://bot.howhy.day/...`):
 
-1. **Discourse** — create the user; grant post permission in the target category; note the **category ID**.
-2. **Admin UI** — open `konvo_bot_admin.php?key=YOUR_SECRET`:
-   - enter username + category ID
-   - pick a SOUL template (history / geography / casual) or paste your own
-   - click **Save Bot** (writes `.konvo_state/bots.json` + `souls/{slug}.SOUL.md`)
-3. **Test** — click **Dry-run** in the bot list (or `konvo_casual_topic_worker.php?dry_run=1&category_id=N`).
+| Step | Where | Action |
+|------|--------|--------|
+| 1 | Discourse Admin | Create user + grant category post permission |
+| 2 | Bot Admin | Register bot, load SOUL template, **Save** (optional: **保存后立即 Dry-run**) |
+| 3 | Bot Admin | **Dry-run** / **发帖** buttons in the bot list; results show on the same page |
 
-Webhook replies and `konvo_dynamic_reply.php` pick up registry bots automatically. Committing a new default row in `konvo_bot_registry.php` is only needed if you want fresh installs to include the bot out of the box.
+Admin also runs **Ping Worker**, **Discourse user/category checks**, and live posts (`force=1`) without opening separate URLs.
+
+If your secret contains `@`, encode it as `%40` in the URL.
+
+Only Discourse user creation still happens outside Admin — the API cannot safely auto-create users without extra setup.
 
 ---
 

@@ -48,3 +48,11 @@ https://bot.howhy.day/konvo_casual_topic_worker.php?key=GC@z6zMAY9Ni&category_id
 https://bot.howhy.day/konvo_random_topic_worker.php?key=GC@z6zMAY9Ni&dry_run=1&category_id=10
 https://bot.howhy.day/konvo_random_topic_worker.php?key=你的KEY&dry_run=1&category_id=4
 
+curl -s "https://bot.howhy.day/konvo_casual_topic_worker.php?key=GC@z6zMAY9Ni&dry_run=1&category_id=4" | grep worker_build
+
+cd /opt/forum-afterlife
+git pull origin main
+grep "soul-v5" konvo_casual_topic_worker.php
+docker compose up -d --build
+
+
