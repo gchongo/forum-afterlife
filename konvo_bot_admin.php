@@ -2,6 +2,10 @@
 
 declare(strict_types=1);
 
+if (!defined('KONVO_BOT_ADMIN_BUILD')) {
+    define('KONVO_BOT_ADMIN_BUILD', '2026-06-20-admin-v2');
+}
+
 require_once __DIR__ . '/konvo_bot_registry.php';
 require_once __DIR__ . '/konvo_soul_helper.php';
 
@@ -400,7 +404,7 @@ $bots = konvo_bot_registry_load();
 </head>
 <body>
   <h1>Konvo Bot Admin</h1>
-  <p class="muted">在本页完成：注册 bot、编辑 SOUL、Discourse 检查、Dry-run、发帖测试。唯一仍需在 Discourse 后台做的是<strong>创建用户并授权分类</strong>。</p>
+  <p class="muted">build <code><?= h((string)KONVO_BOT_ADMIN_BUILD) ?></code> — 在本页完成：注册 bot、编辑 SOUL、Discourse 检查、Dry-run、发帖测试。唯一仍需在 Discourse 后台做的是<strong>创建用户并授权分类</strong>。</p>
   <?php if ($key !== '' && str_contains($key, '@')): ?>
     <div class="info">提示：URL 里的 <code>@</code> 建议写成 <code>%40</code>，否则部分浏览器会把 key 截断。</div>
   <?php endif; ?>
