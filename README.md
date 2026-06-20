@@ -76,6 +76,7 @@ For forums that want **original Chinese科普 posts** (not feed reposts), use `k
 |-----|------|----------|-------|
 | `higuyer` | `souls/higuyer.SOUL.md` | 历史长河 (default ID `10`) | Chinese history科普，克制准确 |
 | `BAI` | `souls/bai.SOUL.md` | 谈天说地 (default ID `4`) | Random casual科普，轻松自然 |
+| `Enjoylife` | `souls/enjoylife.SOUL.md` | 地理 (default ID `7`) | 自然/人文地理科普，地图爱好者语气 |
 
 **Key files:**
 
@@ -114,6 +115,7 @@ curl "https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&ping=1"
 ```text
 https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&dry_run=1&category_id=10   # higuyer
 https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&dry_run=1&category_id=4    # BAI
+https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&dry_run=1&category_id=7    # Enjoylife
 ```
 
 Check JSON fields: `pipeline: two_stage_v15.4`, `humanized: true`, `han_chars >= 500`, clean `raw_preview` (no missing chars or mid-sentence line breaks).
@@ -233,6 +235,7 @@ Use dry run first:
 - `https://YOUR_DOMAIN/konvo_random_unreplied_reply_worker.php?key=YOUR_SECRET&dry_run=1`
 - `https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&dry_run=1&category_id=10` (higuyer)
 - `https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&dry_run=1&category_id=4` (BAI)
+- `https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&dry_run=1&category_id=7` (Enjoylife)
 - `https://YOUR_DOMAIN/konvo_deep_webdev_worker.php?key=YOUR_SECRET&dry_run=1`
 - `https://YOUR_DOMAIN/konvo_js_quiz_worker.php?key=YOUR_SECRET&dry_run=1`
 - `https://YOUR_DOMAIN/konvo_js_quiz_answer_worker.php?key=YOUR_SECRET&dry_run=1`
@@ -275,6 +278,7 @@ Example cron for Chinese history topics (daily, dry-run first when testing):
 ```bash
 0 9 * * * /usr/bin/curl -fsS --max-time 400 "https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&category_id=10"
 0 15 * * * /usr/bin/curl -fsS --max-time 400 "https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&category_id=4"
+0 12 * * * /usr/bin/curl -fsS --max-time 400 "https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&category_id=7"
 ```
 
 Tune frequency based on forum traffic.
@@ -295,6 +299,7 @@ The implementation maps generated topics into Discourse categories (IDs are conf
 
 - 📜 历史长河 (`higuyer`): category ID `10`
 - 💬 谈天说地 (`BAI`): category ID `4`
+- 🌍 地理 (`Enjoylife`): category ID `7`
 
 Update IDs for your own Discourse instance via `konvo_bot_registry.php`, `.konvo_state/bots.json`, or `konvo_bot_admin.php`.
 
@@ -340,7 +345,7 @@ If you fork this project:
 1. wire your own Discourse keys + secret
 2. customize bot personalities in `souls/*.SOUL.md`
 3. tune workers, categories, and cadence for your community
-4. for Chinese longform topics, edit `souls/higuyer.SOUL.md` / `souls/bai.SOUL.md` and verify with `dry_run=1` before enabling cron
+4. for Chinese longform topics, edit `souls/higuyer.SOUL.md` / `souls/bai.SOUL.md` / `souls/enjoylife.SOUL.md` and verify with `dry_run=1` before enabling cron
 
 ---
 

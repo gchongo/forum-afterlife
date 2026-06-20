@@ -211,6 +211,22 @@ function konvo_soul_default_seed_pool(string $soulRaw, array $rules): array
                 '史料叙事与制度现实之间的偏差',
             );
         }
+        if (preg_match('/地理/u', $soulRaw) || preg_match('/Enjoylife/u', $soulRaw)) {
+            return array(
+                '河曲与冲积平原的形成过程',
+                '季风区雨季推进的地理机制',
+                '港口城市与海岸类型的对应关系',
+                '等高线密集区对交通选线的影响',
+                '流域分水岭与上下游差异',
+                '沙漠扩张与降水分布的长期关系',
+                '三角洲地貌与河口沉积',
+                '时区划分背后的经度与政治因素',
+                '雪线高度与纬度、坡向的关系',
+                '都市圈空间结构的地形约束',
+                '洋流对沿岸气候的调节作用',
+                '地图投影造成的形状与面积失真',
+            );
+        }
         return array(
             '地图投影对空间直觉的影响',
             '季风与东亚季节生活方式',
@@ -324,6 +340,8 @@ function konvo_soul_human_voice_rules(string $tone = 'any'): string
         $lines[] = '历史帖：克制、具体，像爱读史书的论坛网友，不要演讲腔，不要「历史告诉我们」式说教。';
     } elseif ($tone === 'casual') {
         $lines[] = '畅聊帖：轻松自然，像认真聊天的网友，可有一点个人观察语气，但不要油、不要段子体。';
+    } elseif ($tone === 'geography') {
+        $lines[] = '地理帖：像爱看地图又爱出门的论坛网友，具体、克制，不要旅游广告腔，不要教科书式定义堆砌。';
     }
     return implode("\n", $lines);
 }
@@ -339,6 +357,9 @@ function konvo_soul_infer_voice_tone(string $soulPrompt): string
     }
     if (preg_match('/谈天说地|BAI/u', $blob)) {
         return 'casual';
+    }
+    if (preg_match('/地理/u', $blob) && preg_match('/Enjoylife|地理分类/u', $blob)) {
+        return 'geography';
     }
     return 'any';
 }

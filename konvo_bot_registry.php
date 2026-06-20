@@ -41,6 +41,13 @@ function konvo_bot_registry_default(): array
             'category_id' => 4,
             'enabled' => true,
         ],
+        [
+            'username' => 'Enjoylife',
+            'name' => 'Enjoylife',
+            'soul_key' => 'enjoylife',
+            'category_id' => 7,
+            'enabled' => true,
+        ],
     ];
 }
 

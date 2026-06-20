@@ -56,6 +56,7 @@ if (!defined('KONVO_ALLOW_CASUAL_TOPIC_POSTS')) define('KONVO_ALLOW_CASUAL_TOPIC
 if (!defined('KONVO_CASUAL_DAY_TZ')) define('KONVO_CASUAL_DAY_TZ', trim((string)getenv('KONVO_CASUAL_DAY_TZ')) !== '' ? trim((string)getenv('KONVO_CASUAL_DAY_TZ')) : 'America/Los_Angeles');
 if (!defined('KONVO_CHAT_CATEGORY_ID')) define('KONVO_CHAT_CATEGORY_ID', 4);
 if (!defined('KONVO_HISTORY_CATEGORY_ID')) define('KONVO_HISTORY_CATEGORY_ID', 10);
+if (!defined('KONVO_GEOGRAPHY_CATEGORY_ID')) define('KONVO_GEOGRAPHY_CATEGORY_ID', 7);
 if (!defined('KONVO_TALK_CATEGORY_ID')) define('KONVO_TALK_CATEGORY_ID', (int)KONVO_CHAT_CATEGORY_ID);
 if (!defined('KONVO_WEBDEV_CATEGORY_ID')) define('KONVO_WEBDEV_CATEGORY_ID', (int)KONVO_HISTORY_CATEGORY_ID);
 if (!defined('KONVO_GAMING_CATEGORY_ID')) define('KONVO_GAMING_CATEGORY_ID', (int)KONVO_HISTORY_CATEGORY_ID);
@@ -746,6 +747,9 @@ function casual_pick_category_id_for_lane(array $lane): int
     }
     if ($forced === 'chat' || $forced === 'talk') {
         return (int)KONVO_CHAT_CATEGORY_ID;
+    }
+    if ($forced === 'geography' || $forced === 'geo' || $forced === '地理') {
+        return (int)KONVO_GEOGRAPHY_CATEGORY_ID;
     }
 
     $laneKey = strtolower(trim((string)($lane['key'] ?? '')));
@@ -1501,6 +1505,7 @@ if (isset($_GET['ping']) && (string)$_GET['ping'] === '1') {
             'konvo_soul_topic_pipeline.php' => is_file(__DIR__ . '/konvo_soul_topic_pipeline.php'),
             'souls/bai.SOUL.md' => is_file(__DIR__ . '/souls/bai.SOUL.md'),
             'souls/higuyer.SOUL.md' => is_file(__DIR__ . '/souls/higuyer.SOUL.md'),
+            'souls/enjoylife.SOUL.md' => is_file(__DIR__ . '/souls/enjoylife.SOUL.md'),
         ),
     ));
 }

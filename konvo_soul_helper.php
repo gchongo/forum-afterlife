@@ -22,6 +22,7 @@ function konvo_normalize_soul_key(string $botKey): string
         'kirupabot' => 'kirupabot',
         'higuyer' => 'higuyer',
         'bai' => 'bai',
+        'enjoylife' => 'enjoylife',
         default => preg_replace('/[^a-z0-9_-]/', '', $key) ?? '',
     };
 }
