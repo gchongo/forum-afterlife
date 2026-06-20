@@ -269,6 +269,7 @@ function konvo_soul_build_topic_system_prompt(string $soulPrompt, array $rules, 
             . 'plan_* 字段可简短英文，但 title/raw 不得出现英文句子。';
     }
     $parts[] = 'raw 正文格式：3 到 6 段，段与段之间仅用一个空行（两个换行符）分隔；段内不得换行，每段写成连贯的一整块文字。';
+    $parts[] = konvo_soul_human_voice_rules(konvo_soul_infer_voice_tone($soulPrompt));
     $parts[] = '【事实纪律】严禁编造：具体百分比、精确人口比例、机构名称（如“XX协会”“XX报告”）、调查数据、年份统计。不确定时改用“许多”“相当多”“在不少城市”等定性表述，不要假装引用数据。';
     $parts[] = '【文字完整】每个词必须写完整，禁止出现缺字、断词、单字引号（如只写“天”而不写“天光/光害”），禁止段内换行。';
     $parts[] = '若 SOUL 要求陈述句结尾：title 不得是问句；结尾段不得有问号或“大家怎么看/欢迎讨论”等互动收束。正文中间可用“如何”“什么”做科普叙述。';
@@ -307,6 +308,113 @@ function konvo_soul_is_boilerplate_topic(string $title, string $raw): bool
         }
     }
     return false;
+}
+
+function konvo_soul_human_voice_rules(string $tone = 'any'): string
+{
+    $lines = array(
+        '【人类感·必须遵守】写像论坛里真人认真发帖，不要像 AI 生成的科普稿或作文模板。',
+        '禁止套话与 AI 腔：综上所述、总而言之、值得注意的是、不难发现、从某种意义上说、在当今社会、随着…的发展、在…的背景下、深刻反映了、具有重要意义、提供了重要参考、本文将、让我们、接下来、不仅…而且…（连续对称排比）、一方面…另一方面…、这不仅仅…更是…、可以说、赋能、底层逻辑、闭环、格局、多维、全方位。',
+        '禁止「首先/其次/再次/最后」机械分条；禁止每段用相同句式开头；禁止段末空洞升华句。',
+        '句子长短要有变化，允许用「但、其实、不过、倒」等自然连接，但不要口水话或网络梗。',
+        '不要自指（不写「这篇文章」「下文将介绍」）；不要写总结性小标题感；不要像考试标准答案或论文摘要。',
+        '用事实、例子、对照推进，像一个人在讲清楚一件事，不是在交作业。',
+    );
+    if ($tone === 'history') {
+        $lines[] = '历史帖：克制、具体，像爱读史书的论坛网友，不要演讲腔，不要「历史告诉我们」式说教。';
+    } elseif ($tone === 'casual') {
+        $lines[] = '畅聊帖：轻松自然，像认真聊天的网友，可有一点个人观察语气，但不要油、不要段子体。';
+    }
+    return implode("\n", $lines);
+}
+
+function konvo_soul_infer_voice_tone(string $soulPrompt): string
+{
+    $blob = konvo_soul_sanitize_utf8($soulPrompt);
+    if ($blob === '') {
+        return 'any';
+    }
+    if (preg_match('/历史/u', $blob) && preg_match('/higuyer|历史长河/u', $blob)) {
+        return 'history';
+    }
+    if (preg_match('/谈天说地|BAI/u', $blob)) {
+        return 'casual';
+    }
+    return 'any';
+}
+
+function konvo_soul_ai_slop_patterns(): array
+{
+    return array(
+        '/综上所述/u',
+        '/总而言之/u',
+        '/值得注意的是/u',
+        '/不难发现/u',
+        '/从某种意义上说/u',
+        '/在当今(?:社会|时代)/u',
+        '/随着.{0,12}的发展/u',
+        '/在.{0,12}的背景下/u',
+        '/深刻反映了/u',
+        '/具有重要意义/u',
+        '/提供了重要(?:参考|启示)/u',
+        '/本文将/u',
+        '/让我们(?:来|一起)/u',
+        '/接下来(?:我们|将)/u',
+        '/这不仅仅/u',
+        '/可以说是/u',
+        '/一方面.{0,40}另一方面/u',
+        '/首先.{0,80}其次/u',
+        '/不仅.{0,40}而且/u',
+        '/赋能/u',
+        '/底层逻辑/u',
+        '/全方位/u',
+        '/历史告诉我们/u',
+        '/从.{0,6}角度来看/u',
+    );
+}
+
+function konvo_soul_detect_ai_slop(string $text): array
+{
+    $text = konvo_soul_sanitize_utf8($text);
+    if ($text === '') {
+        return array();
+    }
+    $hits = array();
+    foreach (konvo_soul_ai_slop_patterns() as $pattern) {
+        if (@preg_match($pattern, $text)) {
+            $hits[] = $pattern;
+        }
+    }
+    return $hits;
+}
+
+function konvo_soul_paragraph_opener_hint(int $index, int $total): string
+{
+    $first = array(
+        '开头直接从具体现象、细节或误解切入，不要空泛总起。',
+        '开头用一个具体场景或对比，不要「在…中」式背景句。',
+        '开头先抛一个具体事实或观察，再展开。',
+    );
+    $middle = array(
+        '本段换种开头，不要用「此外/另外/同时」起头。',
+        '本段从具体例子或对照写起，避免承接上段的同样句式。',
+        '本段可从一个被忽视的细节切入。',
+    );
+    $last = array(
+        '结尾段用平实的陈述句收束，不要升华口号，不要「综上所述」。',
+        '结尾段总结认识即可，不要互动式或演讲式收束。',
+        '结尾段像随手写下的结论，不要作文式「总之」。',
+    );
+    if ($index <= 0) {
+        shuffle($first);
+        return (string)$first[0];
+    }
+    if ($index >= $total - 1) {
+        shuffle($last);
+        return (string)$last[0];
+    }
+    shuffle($middle);
+    return (string)$middle[0];
 }
 
 function konvo_soul_pick_opening_style(): string
@@ -383,6 +491,9 @@ function konvo_soul_retry_hint_for_error(string $errorBlob): string
     }
     if (str_contains($e, 'too similar') || str_contains($e, 'uniqueness')) {
         return '【修正要求】必须换一个完全不同的主题角度，不得改写近期已有话题。';
+    }
+    if (str_contains($e, 'ai slop') || str_contains($e, 'robotic') || str_contains($e, 'template')) {
+        return '【修正要求】去掉 AI 套话和作文模板腔（如综上所述、首先其次、值得注意的是），改成像论坛真人发帖的自然中文。';
     }
     return '';
 }

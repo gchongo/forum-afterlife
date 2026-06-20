@@ -104,13 +104,15 @@ function konvo_soul_extract_llm_json_object(string $content): array
 
 function konvo_soul_build_outline_system_prompt(string $soulPrompt, array $rules, int $categoryId): string
 {
+    $tone = konvo_soul_infer_voice_tone($soulPrompt);
     $parts = array(
         '你是中文科普大纲助手。任务：为论坛话题帖写「大纲」，不是成文。',
         '【事实纪律·最高优先级】大纲阶段就禁止：具体百分比、精确人口/比例、机构名称（协会/基金会/研究院/报告/调查）、「据统计/数据显示」+数字、编造出处。',
+        konvo_soul_human_voice_rules($tone),
         '不确定的内容不要写进大纲；宁可写「机制/背景/影响/日常观察」等定性方向。',
         '只返回 JSON：{"plan_mood":"...","plan_angle":"...","plan_posting_intent":"...","plan_lane":"...","title":"...","outline_paragraphs":["要点1","要点2",...]}。',
         'outline_paragraphs 必须 3 到 6 条；每条 1 到 2 句，只写本段要讲什么，不写完整段落。',
-        'title 必须是具体中文名词短语，不得是问句。',
+        'title 必须是具体中文名词短语，不得是问句，不要作文式或 AI 腔标题。',
     );
     if ($soulPrompt !== '') {
         $parts[] = "Bot SOUL：\n{$soulPrompt}";
@@ -130,6 +132,8 @@ function konvo_soul_build_outline_user_prompt(
     $lines = array(
         "参考主题：{$seedTopic}",
         '请按 SOUL 写大纲。outline_paragraphs 共 3–6 条，禁止出现任何具体数字、机构名、报告名。',
+        '本篇开头方式：' . konvo_soul_pick_opening_style() . '。',
+        'plan_angle 写具体切入角度，不要空泛；各段要点之间不要写成「首先其次再次」结构。',
     );
     if ($recentHints !== '') {
         $lines[] = "避免与近期重复：\n{$recentHints}";
@@ -184,8 +188,10 @@ function konvo_soul_build_expand_user_prompt(string $title, array $outlineParagr
 
 function konvo_soul_build_single_paragraph_system_prompt(string $soulPrompt, array $rules): string
 {
+    $tone = konvo_soul_infer_voice_tone($soulPrompt);
     $parts = array(
-        '你是中文科普写作者。任务：只写「一个」完整段落。',
+        '你是中文论坛科普作者。任务：只写「一个」完整段落，语气像真人发帖，不要 AI 作文腔。',
+        konvo_soul_human_voice_rules($tone),
         '必须 120–180 个汉字，段内禁止任何换行符。',
         '每个词写完整，禁止缺字（如「实际效果」不可写「实效果」，「难以承担」不可写「难以承」）。',
         '禁止编造具体百分比、机构名、报告名；不确定用定性表述。',
@@ -208,13 +214,14 @@ function konvo_soul_expand_paragraphs_individually(
     $total = count($outlineParagraphs);
     foreach ($outlineParagraphs as $i => $outline) {
         $idx = (int)$i + 1;
+        $openerHint = konvo_soul_paragraph_opener_hint((int)$i, $total);
         $payload = array(
             'model' => $model,
             'messages' => array(
                 array('role' => 'system', 'content' => konvo_soul_build_single_paragraph_system_prompt($soulPrompt, $rules)),
-                array('role' => 'user', 'content' => "标题：{$title}\n第 {$idx}/{$total} 段大纲：{$outline}\n请写本段完整正文。"),
+                array('role' => 'user', 'content' => "标题：{$title}\n第 {$idx}/{$total} 段大纲：{$outline}\n写作提示：{$openerHint}\n请写本段完整正文。"),
             ),
-            'temperature' => 0.45,
+            'temperature' => 0.58,
             'max_tokens' => 520,
             'response_format' => array('type' => 'json_object'),
         );
@@ -247,7 +254,8 @@ function konvo_soul_repair_chinese_paragraphs(string $title, array $paragraphs, 
         $outline .= ($i + 1) . '. ' . $p . "\n";
     }
     $system = '你是中文科普校对员。'
-        . '只修正：缺字、断词、段内换行、明显语病。'
+        . '只修正：缺字、断词、段内换行、明显语病、明显的 AI 套话（如综上所述、首先其次）。'
+        . '润色时保持人类论坛语气，不要改成更正式的作文腔。'
         . '禁止：添加具体数字/百分比/机构名/新观点/新史实。'
         . '返回 JSON：{"paragraphs":["修正后段1","修正后段2",...]}，条数与输入相同。';
     $payload = array(
@@ -278,6 +286,68 @@ function konvo_soul_repair_chinese_paragraphs(string $title, array $paragraphs, 
         $out[] = konvo_soul_flatten_paragraph_text((string)$p);
     }
     return array('ok' => true, 'paragraphs' => $out, 'repaired' => true);
+}
+
+function konvo_soul_humanize_enabled(): bool
+{
+    $env = strtolower(trim((string)getenv('KONVO_TOPIC_HUMANIZE')));
+    if ($env === '') {
+        return true;
+    }
+    return in_array($env, array('1', 'true', 'yes', 'on'), true);
+}
+
+function konvo_soul_humanize_chinese_paragraphs(
+    string $title,
+    array $paragraphs,
+    string $soulPrompt,
+    array $rules
+): array {
+    if ($paragraphs === array() || !konvo_soul_humanize_enabled()) {
+        return array('ok' => true, 'paragraphs' => $paragraphs, 'humanized' => false);
+    }
+    $model = trim((string)(getenv('KONVO_HUMANIZE_MODEL') ?: getenv('KONVO_REPAIR_MODEL') ?: getenv('MODEL_TIER_S') ?: 'deepseek-chat'));
+    $minHan = max(500, (int)($rules['min_han_chars'] ?? 500));
+    $tone = konvo_soul_infer_voice_tone($soulPrompt);
+    $outline = '';
+    foreach ($paragraphs as $i => $p) {
+        $outline .= ($i + 1) . '. ' . $p . "\n";
+    }
+    $system = '你是中文论坛帖子润色员。'
+        . '任务：让文字更像真人发帖，去掉 AI 套话和作文腔，但不得改动事实、不得添加新数据/新观点/新史实。'
+        . konvo_soul_human_voice_rules($tone)
+        . '返回 JSON：{"paragraphs":["润色后段1","润色后段2",...]}，条数与输入相同；合并后汉字不少于 ' . $minHan . ' 字；段内禁止换行。';
+    $payload = array(
+        'model' => $model,
+        'messages' => array(
+            array('role' => 'system', 'content' => $system),
+            array('role' => 'user', 'content' => "标题：{$title}\n\n待润色段落：\n{$outline}"),
+        ),
+        'temperature' => 0.55,
+        'max_tokens' => 3200,
+        'response_format' => array('type' => 'json_object'),
+    );
+    $res = konvo_soul_llm_chat_json($payload, $rules);
+    if (!$res['ok']) {
+        unset($payload['response_format']);
+        $res = konvo_soul_llm_chat_json($payload, $rules);
+    }
+    if (!$res['ok']) {
+        return array('ok' => true, 'paragraphs' => $paragraphs, 'humanized' => false);
+    }
+    $obj = konvo_soul_extract_llm_json_object((string)($res['json']['choices'][0]['message']['content'] ?? ''));
+    $fixed = $obj['paragraphs'] ?? null;
+    if (!is_array($fixed) || count($fixed) !== count($paragraphs)) {
+        return array('ok' => true, 'paragraphs' => $paragraphs, 'humanized' => false);
+    }
+    $out = array();
+    foreach ($fixed as $p) {
+        $out[] = konvo_soul_flatten_paragraph_text((string)$p);
+    }
+    if (konvo_soul_count_han_chars(implode('', $out)) < (int)floor($minHan * 0.9)) {
+        return array('ok' => true, 'paragraphs' => $paragraphs, 'humanized' => false);
+    }
+    return array('ok' => true, 'paragraphs' => $out, 'humanized' => true);
 }
 
 function konvo_soul_validate_hard(string $title, string $raw, array $rules): array
@@ -322,6 +392,11 @@ function konvo_soul_validate_hard(string $title, string $raw, array $rules): arr
         return array('ok' => false, 'tier' => 'P3', 'error' => 'content matches forbidden boilerplate template');
     }
 
+    $slopHits = konvo_soul_detect_ai_slop($title . "\n" . $raw);
+    if (count($slopHits) >= 2) {
+        return array('ok' => false, 'tier' => 'P3', 'error' => 'body contains AI slop phrases', 'ai_slop_count' => count($slopHits));
+    }
+
     if (konvo_soul_body_has_inline_newlines($raw)) {
         return array('ok' => false, 'tier' => 'P3', 'error' => 'body still contains inline newlines after prepare');
     }
@@ -350,6 +425,7 @@ function konvo_soul_fact_judge(string $title, string $raw, string $soulPrompt): 
         . 'factual_risk: 1=可信常识, 3=略有模糊表述, 5=编造数据/机构/严重缺字断词。'
         . 'publishable=false 仅当：编造具体百分比/人口统计/机构报告、明显瞎编史实、全文多处缺字断词导致无法阅读。'
         . 'publishable=true 允许：定性科普、「许多研究指出/一般认为」等无具体数字的概括、已修复的通顺文本。'
+        . '不要因为文风略正式就拒稿；仅当存在明显 AI 套话堆砌（如综上所述+首先其次+值得注意的是连用）且影响可信度时才提高 factual_risk。'
         . '不要因缺少脚注或表述略模糊而拒稿，只要无具体假数据即可。';
     $user = "SOUL 摘要：\n{$soulBrief}\n\n标题：{$title}\n\n正文：\n{$bodyBrief}\n\n请质检。";
 
@@ -461,6 +537,12 @@ function konvo_soul_topic_pipeline_generate(
     if (!empty($repair['ok']) && is_array($repair['paragraphs'] ?? null)) {
         $paragraphs = $repair['paragraphs'];
     }
+
+    // --- P1.6 humanize: remove AI slop, keep facts ---
+    $humanize = konvo_soul_humanize_chinese_paragraphs($title, $paragraphs, $soulPrompt, $rules);
+    if (!empty($humanize['ok']) && is_array($humanize['paragraphs'] ?? null)) {
+        $paragraphs = $humanize['paragraphs'];
+    }
     $raw = $normalizeBody(implode("\n\n", $paragraphs));
 
     if ($raw === '') {
@@ -505,8 +587,9 @@ function konvo_soul_topic_pipeline_generate(
 
     return array(
         'ok' => true,
-        'pipeline' => 'two_stage_v15.3',
+        'pipeline' => 'two_stage_v15.4',
         'repaired' => !empty($repair['repaired']),
+        'humanized' => !empty($humanize['humanized']),
         'title' => $title,
         'raw' => $raw,
         'han_chars' => konvo_soul_count_han_chars($raw),

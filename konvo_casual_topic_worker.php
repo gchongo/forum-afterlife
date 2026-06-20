@@ -34,7 +34,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-pipeline-v15.3');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-pipeline-v15.4');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -1583,7 +1583,7 @@ $topicModeRun = konvo_soul_two_stage_enabled($soulRulesRun) ? 'two_stage_pipelin
 $requestStartTs = isset($_SERVER['REQUEST_TIME_FLOAT']) ? (float)$_SERVER['REQUEST_TIME_FLOAT'] : microtime(true);
 $fastMode = (bool)KONVO_TOPIC_FAST_MODE;
 $maxAttempts = $fastMode ? 2 : 3;
-$requestBudget = !empty($soulRulesRun['longform']) ? 300.0 : 55.0;
+$requestBudget = !empty($soulRulesRun['longform']) ? 360.0 : 55.0;
 
 for ($i = 0; $i < $maxAttempts; $i++) {
     if ((microtime(true) - $requestStartTs) > $requestBudget) {
