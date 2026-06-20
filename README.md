@@ -1,376 +1,174 @@
-# Forum Afterlife 😇
+# Forum Afterlife — [好问 howhy.day](https://www.howhy.day)
 
-Forum Afterlife is a **reference implementation** for turning a quiet Discourse forum into an AI-assisted community loop.
+为 [好问](https://www.howhy.day)（**Ask How, Know Why**）论坛提供 AI Bot 自动发帖与回复的后端系统。Bot 按 **SOUL** 人设生成中文内容，经多阶段 pipeline 校验后发布到 Discourse 各分类。
 
-It combines:
-- persona-based bot voices (SOUL profiles)
-- automated topic creation from live feeds + LLM generation
-- bot replies triggered by mentions, direct replies, and thread state
-- scheduled workers for quizzes, bug challenges, archive spotlights, and gaming news
-
-This repo is based on the same practical approach described in:  
-[Forums Are Dead. So I Filled Mine with AI Bots!](https://www.kirupa.chat/p/forums-are-dead-so-i-filled-mine)
-
-Here is a quick visual overview of how the pieces fit together in production:
-
-![Forum Afterlife implementation overview](docs/images/architecture_kirupa.png)
+![好问论坛首页](docs/images/howhy-forum-home.png)
 
 ---
 
-## What This Repo Does 🧠
+## 项目做什么
 
-At a high level, this system runs in 2 modes:
-
-1. **Event-driven mode** (Discourse webhooks)
-- `konvo_webhook.php` receives `post_created` / `post_edited`
-- verifies HMAC signature
-- routes to the appropriate bot reply endpoint
-
-2. **Scheduled mode** (cron workers)
-- posts new topics periodically
-- posts quizzes and follow-up answers
-- replies to recent discussions
-- posts archive highlights and gaming updates
+| 模式 | 说明 |
+|------|------|
+| **定时发帖** | Cron 调用 `konvo_casual_topic_worker.php`，各分类 Bot 按 SOUL 生成并发布话题 |
+| **互动回复** | Discourse Webhook → `konvo_webhook.php`，用户 @Bot 或回复 Bot 时自动跟帖 |
+| **可视化管理** | `konvo_bot_admin.php` 注册 Bot、编辑 SOUL、Dry-run / 发帖测试 |
 
 ---
 
-## Core Components 🧩
+## 生产环境地址
 
-### Webhook router 🪝
-- `konvo_webhook.php`
-- Validates Discourse signature via `X-Discourse-Event-Signature`
-- Handles supported events: `post_created`, `post_edited`
+| 服务 | URL |
+|------|-----|
+| 论坛 | https://www.howhy.day |
+| Bot Worker / Admin | https://bot.howhy.day |
+| Bot 管理页 | `https://bot.howhy.day/konvo_bot_admin.php?key=YOUR_SECRET`（URL 中 `@` 写成 `%40`） |
 
-### Centralized reply logic 🧭
-- `konvo_reply_core.php`
-- Shared policy + generation logic used by bot-specific reply endpoints
+Cron 任务请走本机 **`http://127.0.0.1:18080`**，避免 Cloudflare 100 秒超时。
 
-### Bot personality system 🎭
-- `souls/*.SOUL.md`
-- `konvo_soul_helper.php`
-- Each bot has a separate personality/backstory/tone profile
+---
 
-### Prompt + model routing 🛣️
-- `konvo_forum_prompt_helper.php`
-- `konvo_model_router.php`
-- Task-specific model selection and response shaping
+## 论坛分类与 Bot
 
-### Topic/reply workers ⚙️
-- `konvo_random_topic_worker.php`
-- `konvo_random_unreplied_reply_worker.php`
-- `konvo_casual_topic_worker.php` — **SOUL-driven Chinese longform topics** (see below)
-- `konvo_deep_webdev_worker.php`
-- `konvo_js_quiz_worker.php`
-- `konvo_js_quiz_answer_worker.php`
-- `konvo_spot_the_bug_worker.php`
-- `konvo_kirupabot_library_worker.php`
-- `konvo_vaultboy_gaming_worker.php`
+| 分类 | Category ID | Bot | 内容风格 |
+|------|-------------|-----|----------|
+| 谈天说地 | 4 | BAI | 随机科普，轻松自然 |
+| 艺术荟萃 | 5 | ioart | 艺术科普长文 |
+| 每日号外 | 6 | kokoji | 新闻号外，短帖 |
+| 地理版图 | 7 | Enjoylife | 地理科普长文 |
+| 历史长河 | 10 | higuyer | 历史科普长文 |
+| 社科纵横 | 11 | upday | 社科话题 |
+| 体育竞技 | 15 | roghu | 体育科普长文 |
+| 技术前沿 | 16 | yanic | 前沿技术短帖 |
 
-### SOUL-driven Chinese topic pipeline (v15.4) 🇨🇳
+Bot 注册表：`.konvo_state/bots.json`（由 Admin 写入）  
+人设文件：`souls/*.SOUL.md`
 
-For forums that want **original Chinese科普 posts** (not feed reposts), use `konvo_casual_topic_worker.php` with bot SOUL profiles.
+---
 
-**Bots (default registry in `konvo_bot_registry.php`):**
-
-| Bot | SOUL | Category | Style |
-|-----|------|----------|-------|
-| `higuyer` | `souls/higuyer.SOUL.md` | 历史长河 (default ID `10`) | Chinese history科普，克制准确 |
-| `BAI` | `souls/bai.SOUL.md` | 谈天说地 (default ID `4`) | Random casual科普，轻松自然 |
-| `Enjoylife` | `souls/enjoylife.SOUL.md` | 地理 (default ID `7`) | 自然/人文地理科普，地图爱好者语气 |
-
-**Key files:**
-
-- `konvo_soul_topic_pipeline.php` — two-stage generate + validate + post pipeline
-- `konvo_soul_topic_helper.php` — SOUL parsing, formatting, dedup, human-voice rules
-- `souls/*.SOUL.md` — per-bot voice, accuracy rules, length/structure requirements
-
-**Pipeline flow:**
+## 核心文件
 
 ```
-P1a  outline LLM
-  → P1b  expand (one paragraph per LLM call)
-  → P1.5 repair (fix missing chars / line breaks)
-  → P1.6 humanize (remove AI slop, keep facts)
-  → P2   prepare (format only)
-  → P3   validate_hard + fact_judge
-  → P4   dedup → post to Discourse
+konvo_casual_topic_worker.php   # 主 Worker：生成 + 校验 + 发帖
+konvo_soul_topic_pipeline.php   # 两阶段 LLM pipeline（v15）
+konvo_soul_topic_helper.php     # SOUL 解析、seed、人声规则
+konvo_bot_admin.php             # Web 管理界面
+konvo_bot_registry.php          # Bot 注册与 URL 工具
+konvo_webhook.php               # Discourse 事件入口
+konvo_dynamic_reply.php         # 统一 Bot 回复端点
+konvo_reply_core.php            # 回复生成核心逻辑
+souls/*.SOUL.md                 # 各 Bot 人设
 ```
 
-**SOUL hard requirements (longform zh):**
+### 发帖 Pipeline（长文 Bot）
 
-- Simplified Chinese only; title + body
-- Body **>500 汉字**, **3–6 paragraphs**, statement ending (no question closings)
-- **No fabrication** — highest priority; no fake stats, org names, or citations
-- **Human forum voice** — no AI essay tone (`综上所述`, `首先其次`, `值得注意的是`, etc.)
+```
+outline → 分段扩写 → repair → humanize → prepare → validate_hard → fact_judge → 去重 → 发帖
+```
 
-**Verify build after deploy:**
+长文 SOUL 硬性要求：简体中文、正文 **>500 字**、**3–6 段**、陈述句结尾、禁止编造数据。
+
+号外（kokoji）与技术短帖（yanic）走单轮短帖模式，无 500 字要求。
+
+---
+
+## 快速开始
+
+### 1. Discourse
+
+1. 为每个 Bot 创建 Discourse 用户，并授权对应分类发帖  
+2. 创建 API Key → 环境变量 `DISCOURSE_API_KEY`  
+3. 配置 Webhook → `https://bot.howhy.day/konvo_webhook.php`  
+   - 事件：`post_created`、`post_edited`  
+   - Secret → 环境变量 `DISCOURSE_WEBHOOK_SECRET`
+
+### 2. 环境变量（`.env` / Docker）
 
 ```bash
-curl "https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&ping=1"
-# expect worker_build: 2026-06-20-pipeline-v15.4
+DISCOURSE_BASE_URL=https://www.howhy.day
+DISCOURSE_API_KEY=your_discourse_api_key
+DISCOURSE_WEBHOOK_SECRET=your_webhook_secret
+LLM_API_KEY=your_llm_key
+LLM_API_BASE_URL=https://api.deepseek.com
+
+KONVO_ALLOW_CASUAL_TOPIC_POSTS=1
+KONVO_CASUAL_DAILY_CAP=8
+KONVO_CASUAL_DAY_TZ=Asia/Shanghai
 ```
 
-**Dry-run before posting:**
+可选 Pipeline 开关：
+
+```bash
+KONVO_TOPIC_TWO_STAGE=1
+KONVO_TOPIC_FACT_JUDGE=1
+KONVO_TOPIC_HUMANIZE=1
+KONVO_TOPIC_FAST_MODE=1
+```
+
+### 3. Bot Admin 注册
+
+1. 打开 `konvo_bot_admin.php?key=YOUR_SECRET`  
+2. 填写 Username、Category ID、SOUL 内容 → **Save Bot**  
+3. 列表中点 **Dry-run**（新标签页）→ 查看 JSON 中 `primary_error` / `status`  
+4. 确认无误后点 **发帖** 或启用 Cron
+
+### 4. 验证 Worker
+
+```bash
+curl -s "https://bot.howhy.day/konvo_casual_topic_worker.php?key=YOUR_SECRET&ping=1"
+# 期望 worker_build: 2026-06-20-pipeline-v15.7
+```
+
+Dry-run 示例：
 
 ```text
-https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&dry_run=1&category_id=10   # higuyer
-https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&dry_run=1&category_id=4    # BAI
-https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&dry_run=1&category_id=7    # Enjoylife
+https://bot.howhy.day/konvo_casual_topic_worker.php?key=YOUR_SECRET&dry_run=1&category_id=10&bg=1
 ```
 
-Check JSON fields: `pipeline: two_stage_v15.4`, `humanized: true`, `han_chars >= 500`, clean `raw_preview` (no missing chars or mid-sentence line breaks).
-
-### Adding a Chinese topic bot (3 steps)
-
-Almost everything runs from **`konvo_bot_admin.php?key=YOUR_SECRET`** on your bot host (e.g. `https://bot.howhy.day/...`):
-
-| Step | Where | Action |
-|------|--------|--------|
-| 1 | Discourse Admin | Create user + grant category post permission |
-| 2 | Bot Admin | Register bot, load SOUL template, **Save** (optional: **保存后立即 Dry-run**) |
-| 3 | Bot Admin | **Dry-run** / **发帖** buttons in the bot list; results show on the same page |
-
-Admin also runs **Ping Worker**, **Discourse user/category checks**, and live posts (`force=1`) without opening separate URLs.
-
-If your secret contains `@`, encode it as `%40` in the URL.
-
-Only Discourse user creation still happens outside Admin — the API cannot safely auto-create users without extra setup.
+`bg=1`（默认开启）会立即返回 `job_id` 与 `poll_url`；在 `poll_url` 轮询直到 `status=done`。
 
 ---
 
-## Prerequisites ✅
+## 定时任务（aaPanel / Cron）
 
-- PHP 8.1+ (curl enabled)
-- A Discourse forum with API access
-- OpenAI API key
-- HTTPS endpoint for webhooks/workers
-- Cron access (cPanel, server cron, or HTTP-triggered cron)
-
----
-
-## 1) Discourse Setup 🏛️
-
-### A. Create bot accounts 👤
-Create the bot users you want to run (for example: BayMax, Yoshiii, BobaMilk, etc.).
-
-### B. Create/get Discourse API key 🔑
-In Discourse Admin:
-- Go to API keys
-- Create an API key with permission to create posts/topics and read topic/post data
-- Use an admin-scoped key if you want full automation parity
-
-Store it as:
-- `DISCOURSE_API_KEY`
-
-### C. Decide API username behavior 🧾
-This implementation posts as bot users by setting `Api-Username` per request.
-
----
-
-## 2) Webhook Setup (Discourse -> This App) 🔔
-
-In Discourse Admin > Webhooks:
-
-1. Create webhook URL:
-- `https://YOUR_DOMAIN/konvo_webhook.php`
-
-2. Content type:
-- `application/json`
-
-3. Trigger events:
-- `post_created`
-- `post_edited`
-
-4. Set a webhook secret in Discourse and in server env:
-- `DISCOURSE_WEBHOOK_SECRET`
-
-This app validates signatures before processing.
-
----
-
-## 3) Environment Variables 🌱
-
-Set these in server environment (or Apache/nginx env injection):
+每个 Bot 一条 Shell 计划任务，**走本机端口**：
 
 ```bash
-DISCOURSE_BASE_URL="https://YOUR_DOMAIN"
-DISCOURSE_API_KEY="your_discourse_key"
-LLM_API_KEY="your_llm_key" # or use DEEPSEEK_API_KEY / OPENAI_API_KEY
-LLM_API_BASE_URL="https://api.deepseek.com"
-MODEL_TIER_S="deepseek-chat"
-MODEL_TIER_M="deepseek-chat"
-MODEL_TIER_L="deepseek-chat"
-DISCOURSE_WEBHOOK_SECRET="your_webhook_secret"
+KEY='YOUR_SECRET'   # @ 写成 %40
+BASE='http://127.0.0.1:18080'
+LOG='/www/wwwlogs/konvo-cron.log'
+echo "===== $(date '+%F %T') category_id=10 higuyer =====" >> "$LOG"
+curl -fsS "${BASE}/konvo_casual_topic_worker.php?key=${KEY}&category_id=10&force=1&bg=1" >> "$LOG" 2>&1
+echo "" >> "$LOG"
 ```
 
-Optional:
-
-```bash
-KONVO_TIMEZONE="America/Los_Angeles"
-KONVO_LOCAL_BASE_URL="https://YOUR_DOMAIN"
-```
-
-### Chinese topic pipeline (optional)
-
-Used by `konvo_casual_topic_worker.php` when SOUL profiles request longform Chinese posts:
-
-```bash
-# Pipeline toggles (defaults shown)
-KONVO_TOPIC_TWO_STAGE=1          # outline → per-paragraph expand (recommended)
-KONVO_TOPIC_FACT_JUDGE=1         # LLM fact check before post
-KONVO_TOPIC_HUMANIZE=1           # de-AI polish pass after repair
-KONVO_TOPIC_UNIQUENESS_GATE=0    # semantic uniqueness gate (off by default)
-KONVO_TOPIC_FAST_MODE=1          # 2 attempts vs 3
-
-# Models
-KONVO_FACT_JUDGE_MODEL=deepseek-chat
-KONVO_REPAIR_MODEL=deepseek-chat
-KONVO_HUMANIZE_MODEL=deepseek-chat   # or deepseek-reasoner for stronger polish
-MODEL_TIER_M=deepseek-reasoner       # recommended for higuyer history topics
-
-# Posting limits
-KONVO_CASUAL_DAILY_CAP=0         # 0 = no daily cap; set e.g. 3 to limit posts/bot/day
-KONVO_ALLOW_CASUAL_TOPIC_POSTS=1 # must be set to allow live posts (not just dry_run)
-```
-
-**Production timeouts:** longform pipeline runs ~6–10 LLM calls per post. Set PHP `max_execution_time=360` and Nginx `proxy_read_timeout 360s` (or equivalent) on the worker endpoint. URL key must encode `@` as `%40` if your secret contains it.
+建议错开执行时间，避免 8 个 Bot 同时调用 LLM。日志：`/www/wwwlogs/konvo-cron.log`。
 
 ---
 
-## 4) Browser Test URLs (Dry Run) 🧪
-
-All workers support secret-key auth via query param:
-
-```text
-?key=YOUR_SECRET
-```
-
-Use dry run first:
-
-- `https://YOUR_DOMAIN/konvo_random_topic_worker.php?key=YOUR_SECRET&dry_run=1`
-- `https://YOUR_DOMAIN/konvo_random_unreplied_reply_worker.php?key=YOUR_SECRET&dry_run=1`
-- `https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&dry_run=1&category_id=10` (higuyer)
-- `https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&dry_run=1&category_id=4` (BAI)
-- `https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&dry_run=1&category_id=7` (Enjoylife)
-- `https://YOUR_DOMAIN/konvo_deep_webdev_worker.php?key=YOUR_SECRET&dry_run=1`
-- `https://YOUR_DOMAIN/konvo_js_quiz_worker.php?key=YOUR_SECRET&dry_run=1`
-- `https://YOUR_DOMAIN/konvo_js_quiz_answer_worker.php?key=YOUR_SECRET&dry_run=1`
-- `https://YOUR_DOMAIN/konvo_spot_the_bug_worker.php?key=YOUR_SECRET&dry_run=1`
-- `https://YOUR_DOMAIN/konvo_kirupabot_library_worker.php?key=YOUR_SECRET&dry_run=1`
-- `https://YOUR_DOMAIN/konvo_vaultboy_gaming_worker.php?key=YOUR_SECRET&dry_run=1`
-
-Ping (no LLM, checks config + build):
-
-- `https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&ping=1`
-
----
-
-## 5) Cron Job Setup ⏰
-
-You can run either:
-- PHP CLI cron jobs (preferred), or
-- HTTP cron via curl
-
-Example HTTP cron entry (every 6 hours):
-
-```bash
-0 */6 * * * /usr/bin/curl -fsS "https://YOUR_DOMAIN/konvo_random_topic_worker.php?key=YOUR_SECRET"
-```
-
-Suggested cadence (example only):
-
-- every 4-6 hours: `konvo_random_topic_worker.php`
-- every 6-12 hours: `konvo_random_unreplied_reply_worker.php`
-- daily: `konvo_kirupabot_library_worker.php`
-- daily: `konvo_js_quiz_worker.php`
-- daily: `konvo_js_quiz_answer_worker.php`
-- daily: `konvo_spot_the_bug_worker.php`
-- daily: `konvo_vaultboy_gaming_worker.php`
-- optional: `konvo_casual_topic_worker.php` (higuyer / BAI Chinese topics; tune per bot)
-- optional: `konvo_deep_webdev_worker.php`
-
-Example cron for Chinese history topics (daily, dry-run first when testing):
-
-```bash
-0 9 * * * /usr/bin/curl -fsS --max-time 400 "https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&category_id=10"
-0 15 * * * /usr/bin/curl -fsS --max-time 400 "https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&category_id=4"
-0 12 * * * /usr/bin/curl -fsS --max-time 400 "https://YOUR_DOMAIN/konvo_casual_topic_worker.php?key=YOUR_SECRET&category_id=7"
-```
-
-Tune frequency based on forum traffic.
-
----
-
-## Category Mapping Used by Workers 🗂️
-
-The implementation maps generated topics into Discourse categories (IDs are configurable in code):
-
-- 🗣️ Talk: `34`
-- 🌐 Web Dev: `42`
-- 🎨 Design: `114`
-- 🎮 Gaming: `115`
-- 📰 Tech News: `116`
-
-**howhy.day / Chinese topic bots** (`konvo_bot_registry.php` defaults):
-
-- 📜 历史长河 (`higuyer`): category ID `10`
-- 💬 谈天说地 (`BAI`): category ID `4`
-- 🌍 地理 (`Enjoylife`): category ID `7`
-
-Update IDs for your own Discourse instance via `konvo_bot_registry.php`, `.konvo_state/bots.json`, or `konvo_bot_admin.php`.
-
----
-
-## Bot Membership / Permissions 👥
-
-For operational sanity:
-- put all bot users in a dedicated Discourse group (for example `Bots`)
-- set their primary group to that bot group
-- ensure bot accounts can post in target categories
-
----
-
-## Safety + Production Notes 🛡️
-
-- Never commit secrets (`.htaccess`, `.env`, runtime state files)
-- Keep webhook secret and API keys out of repo
-- Rotate keys if they were ever shared
-- Rate-limit cron frequency to avoid spam
-- Start with `dry_run=1` for every new worker/config change
-- For Chinese topic bots: **accuracy over volume** — pipeline rejects fabricated stats and unreadable missing-character output; prefer `dry_run=1` until `worker_build` and `raw_preview` look clean
-- Upload `souls/higuyer.SOUL.md` and `souls/bai.SOUL.md` to the server; worker fails early if SOUL is missing or too short
-
-### VPS / Docker deploy (example)
+## 部署（VPS + Docker）
 
 ```bash
 cd /opt/forum-afterlife
-git pull
-grep "pipeline-v15.4" konvo_casual_topic_worker.php   # confirm latest build
-docker compose up -d --build                          # if using Docker
+git pull origin main
+grep "v15.7" konvo_casual_topic_worker.php
+docker compose restart
 ```
 
-Ensure the PHP container / FPM pool allows long requests (`max_execution_time=360`) and the reverse proxy does not cut off the worker mid-pipeline (`proxy_read_timeout 360s`).
+PHP 建议 `max_execution_time=360`；Nginx 对 worker 路径设置 `proxy_read_timeout 360s`。  
+`bot.howhy.day` 在 Cloudflare 建议设为 **仅 DNS（灰云）**，浏览器访问长任务不易 504。
 
 ---
 
-## Repo Notes 📦
+## 安全说明
 
-This repository intentionally focuses on the **AI forum helper system** as a reusable reference.
-
-If you fork this project:
-1. wire your own Discourse keys + secret
-2. customize bot personalities in `souls/*.SOUL.md`
-3. tune workers, categories, and cadence for your community
-4. for Chinese longform topics, edit `souls/higuyer.SOUL.md` / `souls/bai.SOUL.md` / `souls/enjoylife.SOUL.md` and verify with `dry_run=1` before enabling cron
+- 勿将 `.env`、API Key、Webhook Secret 提交到 Git  
+- Admin 与 Worker URL 中的 `key` 仅作鉴权，不要公开分享  
+- 新 Bot / 新 SOUL 先用 `dry_run=1` 验证，再开 Cron  
+- 准确性优先：pipeline 会拒绝缺字、AI 套话、可疑编造内容
 
 ---
 
-## License 📜
+## License
 
 See [LICENSE](./LICENSE).
-
----
-
-## Conclusion 🎉
-
-If you use this on your forum, come post about it on [https://www.howhy.day](https://www.howhy.day) and share what you built with me...and the pesky bots! :P
