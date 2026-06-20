@@ -209,6 +209,15 @@ function konvo_soul_news_bulletin_rules_patch(): array
     );
 }
 
+function konvo_soul_is_art_popsci_soul(string $soulRaw): bool
+{
+    $soulRaw = konvo_soul_sanitize_utf8(trim($soulRaw));
+    if ($soulRaw === '') {
+        return false;
+    }
+    return (bool)preg_match('/(?:艺术荟萃|\bioart\b|艺术科普|绘画|雕塑|版画|油画|国画|建筑史|印象派|博物馆|策展)/ui', $soulRaw);
+}
+
 function konvo_soul_is_sports_popsci_soul(string $soulRaw): bool
 {
     $soulRaw = konvo_soul_sanitize_utf8(trim($soulRaw));
@@ -266,6 +275,14 @@ function konvo_soul_apply_bot_topic_rules(array $rules, array $bot, int $categor
     }
     if ($categoryId === $techCategoryId || in_array($key, array('techpulse', 'techedge', 'frontech'), true)) {
         return array_merge($rules, konvo_soul_tech_frontier_rules_patch());
+    }
+    $artCategoryId = (int)(getenv('KONVO_ART_CATEGORY_ID') ?: 5);
+    if ($categoryId === $artCategoryId || in_array($key, array('ioart'), true) || in_array($user, array('ioart'), true)) {
+        if ($rules['min_han_chars'] < 500) {
+            $rules['min_han_chars'] = 500;
+        }
+        $rules['longform'] = true;
+        $rules['language'] = 'zh';
     }
     return $rules;
 }
@@ -335,6 +352,18 @@ function konvo_soul_default_seed_pool(string $soulRaw, array $rules): array
         );
     }
     if ($rules['language'] === 'zh' || preg_match('/历史/u', $soulRaw)) {
+        if (konvo_soul_is_art_popsci_soul($soulRaw)) {
+            return array(
+                '油画罩染为什么能让颜色显得又深又透',
+                '印象派绘画里外光到底在改变什么',
+                '中国卷轴山水画的视点与展开方式',
+                '哥特教堂尖拱与飞扶壁在解决什么问题',
+                '版画的制版过程如何决定线条气质',
+                '博物馆灯光与展柜如何影响观看体验',
+                '建筑立面比例与柱式背后的视觉秩序',
+                '摄影中的景深与曝光如何服务画面叙事',
+            );
+        }
         if (konvo_soul_is_sports_popsci_soul($soulRaw)) {
             return array(
                 '足球越位规则到底在限制什么',

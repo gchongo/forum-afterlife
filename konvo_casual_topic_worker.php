@@ -34,7 +34,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-pipeline-v15.6');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-pipeline-v15.7');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -97,6 +97,94 @@ function casual_out(int $status, array $data): void
     exit;
 }
 
+function casual_topic_jobs_dir(): string
+{
+    $dir = __DIR__ . '/.konvo_state/topic_jobs';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+    return $dir;
+}
+
+function casual_topic_job_path(string $jobId): string
+{
+    $safe = preg_replace('/[^a-zA-Z0-9_-]/', '', $jobId) ?? '';
+    return casual_topic_jobs_dir() . '/' . $safe . '.json';
+}
+
+function casual_topic_job_save(string $jobId, array $data): void
+{
+    if ($jobId === '') {
+        return;
+    }
+    $data['updated_at'] = date('c');
+    @file_put_contents(casual_topic_job_path($jobId), casual_json_encode($data));
+}
+
+function casual_topic_job_load(string $jobId): ?array
+{
+    if ($jobId === '') {
+        return null;
+    }
+    $path = casual_topic_job_path($jobId);
+    if (!is_file($path)) {
+        return null;
+    }
+    $raw = @file_get_contents($path);
+    if (!is_string($raw) || trim($raw) === '') {
+        return null;
+    }
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : null;
+}
+
+function casual_topic_job_new_id(int $categoryId): string
+{
+    try {
+        $rand = bin2hex(random_bytes(4));
+    } catch (\Throwable $e) {
+        $rand = (string)mt_rand(1000, 9999);
+    }
+    return date('Ymd-His') . '-c' . max(0, $categoryId) . '-' . $rand;
+}
+
+function casual_flush_early_json(int $status, array $data): void
+{
+    if (!headers_sent()) {
+        http_response_code($status);
+        header('Content-Type: application/json; charset=utf-8');
+        header('Connection: close');
+    }
+    $body = casual_json_encode($data);
+    if (!headers_sent()) {
+        header('Content-Length: ' . strlen($body));
+    }
+    echo $body;
+    if (function_exists('fastcgi_finish_request')) {
+        fastcgi_finish_request();
+        return;
+    }
+    while (ob_get_level() > 0) {
+        @ob_end_flush();
+    }
+    @flush();
+}
+
+function casual_finish(int $status, array $data): void
+{
+    global $casualBgJobId;
+    if (is_string($casualBgJobId) && $casualBgJobId !== '') {
+        $data['job_id'] = $casualBgJobId;
+        $data['status'] = !empty($data['ok']) ? 'done' : 'failed';
+        if (!isset($data['posted'])) {
+            $data['posted'] = false;
+        }
+        casual_topic_job_save($casualBgJobId, $data);
+        return;
+    }
+    casual_out($status, $data);
+}
+
 set_exception_handler(static function (\Throwable $e): void {
     $where = basename((string)$e->getFile()) . ':' . (int)$e->getLine();
     $msg = trim((string)$e->getMessage());
@@ -110,7 +198,25 @@ set_exception_handler(static function (\Throwable $e): void {
 });
 
 register_shutdown_function(static function (): void {
+    global $casualBgJobId;
     $err = error_get_last();
+    if (is_array($err)) {
+        $fatal = array(E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR);
+        if (in_array((int)($err['type'] ?? 0), $fatal, true)
+            && is_string($casualBgJobId) && $casualBgJobId !== '') {
+            $job = casual_topic_job_load($casualBgJobId);
+            if (is_array($job) && (string)($job['status'] ?? '') === 'running') {
+                $msg = trim((string)($err['message'] ?? 'Fatal error'));
+                casual_topic_job_save($casualBgJobId, array_merge($job, array(
+                    'ok' => false,
+                    'status' => 'failed',
+                    'posted' => false,
+                    'error' => 'Casual worker fatal: ' . $msg,
+                )));
+            }
+            return;
+        }
+    }
     if (!is_array($err)) return;
     $fatal = array(E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR);
     if (!in_array((int)($err['type'] ?? 0), $fatal, true)) return;
@@ -1505,6 +1611,8 @@ if (isset($_GET['ping']) && (string)$_GET['ping'] === '1') {
         'llm_key_set' => KONVO_OPENAI_API_KEY !== '',
         'two_stage_pipeline' => konvo_soul_two_stage_enabled($pingRules),
         'fact_judge' => konvo_soul_fact_judge_enabled(),
+        'bg_mode_default' => true,
+        'cloudflare_hint' => 'Longform posts take 1–3 min. Use bg=1 (default) and poll job URL; 504 in browser does not mean failure.',
         'max_execution_time' => (int)ini_get('max_execution_time'),
         'iconv' => function_exists('iconv'),
         'files' => array(
@@ -1522,6 +1630,24 @@ if (KONVO_API_KEY === '') {
 if (KONVO_OPENAI_API_KEY === '') {
     casual_out(500, array('ok' => false, 'error' => 'OPENAI_API_KEY is not configured on the server.'));
 }
+
+$casualBgJobId = '';
+$pollJobId = trim((string)($_GET['job'] ?? ''));
+if ($pollJobId !== '') {
+    $job = casual_topic_job_load($pollJobId);
+    if (!is_array($job)) {
+        casual_out(404, array(
+            'ok' => false,
+            'error' => 'job not found',
+            'job_id' => $pollJobId,
+            'worker_build' => (string)KONVO_WORKER_BUILD,
+        ));
+    }
+    $job['job_id'] = $pollJobId;
+    casual_out(200, $job);
+}
+
+$bgMode = !isset($_GET['bg']) || (string)$_GET['bg'] !== '0';
 
 $dryRun = isset($_GET['dry_run']) && (string)$_GET['dry_run'] === '1';
 $force = isset($_GET['force']) && (string)$_GET['force'] === '1';
@@ -1588,6 +1714,43 @@ if (!$dryRun && !$force && $dailyCap > 0) {
     }
 }
 $recentForumTitles = casual_fetch_latest_topic_titles(100, $categoryId);
+
+if ($bgMode) {
+    $casualBgJobId = casual_topic_job_new_id($categoryId);
+    $pollParams = array('job' => $casualBgJobId);
+    if ($dryRun) {
+        $pollParams['dry_run'] = '1';
+    }
+    $pollUrl = konvo_bot_registry_worker_action_url($pollParams, $providedKey);
+    casual_topic_job_save($casualBgJobId, array(
+        'ok' => true,
+        'status' => 'running',
+        'posted' => false,
+        'dry_run' => $dryRun,
+        'category_id' => $categoryId,
+        'bot' => array(
+            'username' => (string)($bot['username'] ?? ''),
+            'category_id' => $categoryId,
+        ),
+        'started_at' => date('c'),
+        'poll_url' => $pollUrl,
+        'worker_build' => (string)KONVO_WORKER_BUILD,
+        'hint' => '后台生成中。Cloudflare 约 100 秒会断连，请每隔 15–30 秒刷新 poll_url 直到 status=done 或 failed。',
+    ));
+    casual_flush_early_json(202, array(
+        'ok' => true,
+        'bg' => true,
+        'status' => 'running',
+        'posted' => false,
+        'dry_run' => $dryRun,
+        'job_id' => $casualBgJobId,
+        'poll_url' => $pollUrl,
+        'category_id' => $categoryId,
+        'bot' => (string)($bot['username'] ?? ''),
+        'worker_build' => (string)KONVO_WORKER_BUILD,
+        'hint' => '任务已在服务器后台继续。浏览器 504 不代表失败；请打开 poll_url 查看最终结果。',
+    ));
+}
 
 $attempts = array();
 $generated = null;
@@ -1668,7 +1831,7 @@ if (!is_array($generated) || empty($generated['ok'])) {
             'fact_judge' => $a['fact_judge'] ?? null,
         );
     }
-    casual_out(200, array(
+    casual_finish(200, array(
         'ok' => false,
         'posted' => false,
         'error' => 'Failed to generate a unique SOUL-compliant topic; nothing was posted.',
@@ -1712,7 +1875,7 @@ $plan = isset($generated['plan']) && is_array($generated['plan']) ? $generated['
 
 $finalDupCheck = casual_topic_too_similar($title, $raw, $recent, $recentForumTitles);
 if (!empty($finalDupCheck['duplicate'])) {
-    casual_out(200, array(
+    casual_finish(200, array(
         'ok' => false,
         'posted' => false,
         'error' => 'Final duplicate check blocked post.',
@@ -1737,7 +1900,7 @@ $quirkyMode = false;
 $quirkyMediaUrl = '';
 
 if ($dryRun) {
-    casual_out(200, array(
+    casual_finish(200, array(
         'ok' => true,
         'dry_run' => true,
         'action' => 'would_post_casual_topic',
@@ -1770,7 +1933,7 @@ if ($dryRun) {
 
 $post = casual_post_topic((string)($bot['username'] ?? 'BAI'), $title, $raw, $categoryId);
 if (!$post['ok']) {
-    casual_out(200, array(
+    casual_finish(200, array(
         'ok' => false,
         'posted' => false,
         'error' => 'Failed to post casual topic.',
@@ -1797,7 +1960,7 @@ casual_remember_topic($title, (string)($plan['angle'] ?? ''), (string)($plan['la
 casual_consensus_register_topic($topicId, $bot, $title, $categoryId, $plan);
 $todayCountAfterPost = casual_daily_count_increment($today);
 
-casual_out(200, array(
+casual_finish(200, array(
     'ok' => true,
     'posted' => true,
     'action' => 'posted_casual_topic',

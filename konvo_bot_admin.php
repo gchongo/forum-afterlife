@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 if (!defined('KONVO_BOT_ADMIN_BUILD')) {
-    define('KONVO_BOT_ADMIN_BUILD', '2026-06-20-admin-v2.2');
+    define('KONVO_BOT_ADMIN_BUILD', '2026-06-20-admin-v2.3');
 }
 
 require_once __DIR__ . '/konvo_bot_registry.php';
@@ -416,7 +416,7 @@ $bots = konvo_bot_registry_load();
           <button type="submit">Ping Worker</button>
         </form>
       </div>
-      <p class="muted">Ping 会检查 LLM key、pipeline 版本、SOUL 文件是否存在（约 1 秒）。Dry-run / 发帖请用下方<strong>新标签页链接</strong>直接打开 worker（长文 bot 约 1–3 分钟，避免 Admin 页 504）。</p>
+      <p class="muted">Ping 约 1 秒。Dry-run / 发帖会<strong>立即返回 job_id</strong>（bg 模式），请打开返回 JSON 里的 <code>poll_url</code> 每隔 15–30 秒刷新，直到 <code>status=done</code>。浏览器出现 Cloudflare 504 不代表失败。</p>
     </div>
 
     <?php if ($message !== ''): ?><div class="ok"><?= h($message) ?></div><?php endif; ?>

@@ -223,7 +223,7 @@ function konvo_bot_registry_worker_base_url(): string
 function konvo_bot_registry_dry_run_url(int $categoryId, string $secret = ''): string
 {
     return konvo_bot_registry_worker_action_url(
-        array('dry_run' => '1', 'category_id' => max(0, $categoryId)),
+        array('dry_run' => '1', 'category_id' => max(0, $categoryId), 'bg' => '1'),
         $secret
     );
 }
@@ -231,7 +231,7 @@ function konvo_bot_registry_dry_run_url(int $categoryId, string $secret = ''): s
 function konvo_bot_registry_post_url(int $categoryId, string $secret = ''): string
 {
     return konvo_bot_registry_worker_action_url(
-        array('category_id' => max(0, $categoryId), 'force' => '1'),
+        array('category_id' => max(0, $categoryId), 'force' => '1', 'bg' => '1'),
         $secret
     );
 }
