@@ -18,6 +18,9 @@ require_once __DIR__ . '/konvo_soul_topic_helper.php';
 
 function konvo_soul_two_stage_enabled(array $rules): bool
 {
+    if (!empty($rules['news_bulletin']) || !empty($rules['tech_frontier'])) {
+        return false;
+    }
     if (empty($rules['longform']) || (($rules['language'] ?? 'any') !== 'zh')) {
         return false;
     }

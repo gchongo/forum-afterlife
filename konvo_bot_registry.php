@@ -228,6 +228,14 @@ function konvo_bot_registry_dry_run_url(int $categoryId, string $secret = ''): s
     );
 }
 
+function konvo_bot_registry_post_url(int $categoryId, string $secret = ''): string
+{
+    return konvo_bot_registry_worker_action_url(
+        array('category_id' => max(0, $categoryId), 'force' => '1'),
+        $secret
+    );
+}
+
 function konvo_bot_registry_worker_action_url(array $params, string $secret = ''): string
 {
     $base = konvo_bot_registry_worker_base_url();

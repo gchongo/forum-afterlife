@@ -186,6 +186,9 @@ function konvo_soul_parse_topic_rules(string $soulRaw): array
     if (konvo_soul_is_news_bulletin_soul($soul)) {
         $rules = array_merge($rules, konvo_soul_news_bulletin_rules_patch());
     }
+    if (konvo_soul_is_tech_frontier_soul($soul)) {
+        $rules = array_merge($rules, konvo_soul_tech_frontier_rules_patch());
+    }
 
     return $rules;
 }
@@ -206,20 +209,70 @@ function konvo_soul_news_bulletin_rules_patch(): array
     );
 }
 
+function konvo_soul_is_sports_popsci_soul(string $soulRaw): bool
+{
+    $soulRaw = konvo_soul_sanitize_utf8(trim($soulRaw));
+    if ($soulRaw === '') {
+        return false;
+    }
+    return (bool)preg_match('/(?:体育竞技|体育科普|\broghu\b|足球|篮球|马拉松|奥运)/ui', $soulRaw);
+}
+
+function konvo_soul_is_history_popsci_soul(string $soulRaw): bool
+{
+    $soulRaw = konvo_soul_sanitize_utf8(trim($soulRaw));
+    if ($soulRaw === '') {
+        return false;
+    }
+    if (konvo_soul_is_sports_popsci_soul($soulRaw)) {
+        return false;
+    }
+    return (bool)preg_match('/(?:中国历史|历史长河|higuyer|朝代|制度演变|史料|科举|漕运)/u', $soulRaw);
+}
+
+function konvo_soul_is_tech_frontier_soul(string $soulRaw): bool
+{
+    $soulRaw = konvo_soul_sanitize_utf8(trim($soulRaw));
+    if ($soulRaw === '') {
+        return false;
+    }
+    return (bool)preg_match('/(?:技术前沿|前沿技术|IT技术|AI技术|航天技术|技术动态)/ui', $soulRaw);
+}
+
+function konvo_soul_tech_frontier_rules_patch(): array
+{
+    return array(
+        'longform' => false,
+        'tech_frontier' => true,
+        'language' => 'zh',
+        'min_han_chars' => 0,
+        'min_paragraphs' => 0,
+        'max_paragraphs' => 0,
+        'min_body_chars' => 60,
+        'max_body_len' => 2800,
+        'max_title_len' => 100,
+        'statement_ending' => false,
+    );
+}
+
 function konvo_soul_apply_bot_topic_rules(array $rules, array $bot, int $categoryId = 0): array
 {
     $key = strtolower(trim((string)($bot['soul_key'] ?? '')));
     $user = strtolower(trim((string)($bot['username'] ?? '')));
     $newsCategoryId = (int)(getenv('KONVO_NEWS_CATEGORY_ID') ?: 6);
+    $techCategoryId = (int)(getenv('KONVO_TECH_CATEGORY_ID') ?: 16);
     if ($categoryId === $newsCategoryId || in_array($key, array('kokoji'), true) || in_array($user, array('kokoji'), true)) {
         return array_merge($rules, konvo_soul_news_bulletin_rules_patch());
+    }
+    if ($categoryId === $techCategoryId || in_array($key, array('techpulse', 'techedge', 'frontech'), true)) {
+        return array_merge($rules, konvo_soul_tech_frontier_rules_patch());
     }
     return $rules;
 }
 
 function konvo_soul_should_run_fact_judge(array $rules): bool
 {
-    if (!empty($rules['news_bulletin'])) {
+    if (!empty($rules['news_bulletin']) || !empty($rules['tech_frontier'])) {
         return false;
     }
     $env = strtolower(trim((string)getenv('KONVO_TOPIC_FACT_JUDGE')));
@@ -248,6 +301,9 @@ function konvo_soul_topic_llm_timeout(array $rules): int
     if (!empty($rules['news_bulletin'])) {
         return 60;
     }
+    if (!empty($rules['tech_frontier'])) {
+        return 60;
+    }
     return $fastMode ? 28 : 22;
 }
 
@@ -266,8 +322,32 @@ function konvo_soul_default_seed_pool(string $soulRaw, array $rules): array
             '今日欧美市场隔夜几则动态号外',
         );
     }
+    if (konvo_soul_is_tech_frontier_soul($soulRaw)) {
+        return array(
+            '某开源 AI 推理框架新版本带来的几个变化',
+            '大模型上下文长度竞争背后在拼什么',
+            '低轨卫星批次发射的公开信息与看点',
+            '一款新芯片架构发布后的生态变量',
+            '云原生领域近期值得跟进的一条动态',
+            '重要安全漏洞披露与修复方向梳理',
+            '航天任务窗口临近时的公开报道要点',
+            '编程语言或数据库重大版本更新在解决什么',
+        );
+    }
     if ($rules['language'] === 'zh' || preg_match('/历史/u', $soulRaw)) {
-        if (preg_match('/历史/u', $soulRaw)) {
+        if (konvo_soul_is_sports_popsci_soul($soulRaw)) {
+            return array(
+                '足球越位规则到底在限制什么',
+                '篮球进攻24秒如何改变比赛节奏',
+                '马拉松后半程为何会明显掉速',
+                '网球抢七局为何采用这种计分方式',
+                '游泳自由泳划频与划距如何配合',
+                'VAR 在足球比赛里解决什么问题',
+                '短跑起跑与加速阶段的技术要点',
+                '排球拦网与进攻节奏的基本关系',
+            );
+        }
+        if (konvo_soul_is_history_popsci_soul($soulRaw)) {
             return array(
                 '唐代两税法与中期财政稳定',
                 '明代财政对白银依赖加深的制度背景',
@@ -350,6 +430,8 @@ function konvo_soul_build_topic_system_prompt(string $soulPrompt, array $rules, 
     $parts[] = 'SOUL 中的所有语言、长度、结构、风格、禁区、准确性规则，优先于任何默认行为。';
     if (!empty($rules['news_bulletin'])) {
         $parts[] = '【号外模式】写今日/近日新闻热点号外，不是科普、不是地理教科书。篇幅灵活，无 500 字要求。';
+    } elseif (!empty($rules['tech_frontier'])) {
+        $parts[] = '【技术前沿模式】写 IT/AI/航天/芯片等前沿技术短帖，信息密度高、篇幅灵活，无 500 字要求。';
     } elseif ($isZh && !empty($rules['longform'])) {
         $parts[] = '若 SOUL 要求中文科普长文，则 title 与 raw 必须中文，raw 必须超过 500 个中文字符，且 3 到 6 段。';
     }
@@ -542,6 +624,8 @@ function konvo_soul_build_topic_user_prompt(
     $lines[] = '请严格按 SOUL 生成一篇可发帖的话题内容。';
     if (!empty($rules['news_bulletin'])) {
         $lines[] = '【号外】必须写新闻热点号外：先事实后评论；禁止港口地理、科普教科书、冷知识体。';
+    } elseif (!empty($rules['tech_frontier'])) {
+        $lines[] = '【技术前沿】写前沿技术动态短帖：可含产品/版本/任务名，禁止空泛鸡汤；无最低字数。';
     }
     $lines[] = '本篇开头方式：' . konvo_soul_pick_opening_style() . '。';
     $lines[] = '标题必须是具体名词短语，不得使用「关于…大家有什么新想法」这类讨论式标题。';
@@ -556,6 +640,8 @@ function konvo_soul_build_topic_user_prompt(
     if (($rules['language'] ?? 'any') === 'zh') {
         if (!empty($rules['news_bulletin'])) {
             $lines[] = '【再次强调】title 与 raw 必须全部是简体中文；号外新闻体，无最低字数。';
+        } elseif (!empty($rules['tech_frontier'])) {
+            $lines[] = '【再次强调】title 与 raw 必须全部是简体中文；技术前沿短帖，无最低字数。';
         } else {
             $lines[] = '【再次强调】title 与 raw 必须全部是简体中文，正文必须超过 520 个汉字（宁长勿短），不得输出英文段落。';
         }

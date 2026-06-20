@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 if (!defined('KONVO_BOT_ADMIN_BUILD')) {
-    define('KONVO_BOT_ADMIN_BUILD', '2026-06-20-admin-v2.1');
+    define('KONVO_BOT_ADMIN_BUILD', '2026-06-20-admin-v2.2');
 }
 
 require_once __DIR__ . '/konvo_bot_registry.php';
@@ -188,6 +188,12 @@ function admin_worker_summary(array $json): string
     if (!empty($json['error'])) {
         $parts[] = 'error=' . (string)$json['error'];
     }
+    if (!empty($json['primary_error'])) {
+        $parts[] = 'primary=' . (string)$json['primary_error'];
+    }
+    if (!empty($json['topic_mode'])) {
+        $parts[] = 'mode=' . (string)$json['topic_mode'];
+    }
     return implode(' · ', $parts);
 }
 
@@ -226,22 +232,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $authorized) {
         } else {
             $message = 'Bot deleted: ' . $username;
         }
-    } elseif (in_array($action, array('worker_ping', 'worker_dry_run', 'worker_post'), true)) {
+    } elseif (in_array($action, array('worker_ping'), true)) {
         $categoryId = (int)($_POST['category_id'] ?? 0);
         $username = trim((string)($_POST['username'] ?? ''));
         if ($action === 'worker_ping') {
             $workerResult = admin_invoke_topic_worker(array('ping' => '1'), $key, 30);
+            $workerSummary = admin_worker_summary(is_array($workerResult['json'] ?? null) ? $workerResult['json'] : array());
             $message = 'Worker ping finished.';
-        } elseif ($categoryId <= 0) {
-            $error = 'category_id is required for worker actions.';
-        } elseif ($action === 'worker_dry_run') {
-            $workerResult = admin_invoke_topic_worker(array('dry_run' => '1', 'category_id' => $categoryId), $key, 360);
-            $workerSummary = admin_worker_summary(is_array($workerResult['json'] ?? null) ? $workerResult['json'] : array());
-            $message = 'Dry-run finished for category ' . $categoryId . ($username !== '' ? ' (' . $username . ')' : '') . '.';
-        } else {
-            $workerResult = admin_invoke_topic_worker(array('category_id' => $categoryId, 'force' => '1'), $key, 360);
-            $workerSummary = admin_worker_summary(is_array($workerResult['json'] ?? null) ? $workerResult['json'] : array());
-            $message = 'Live post attempt finished for category ' . $categoryId . ($username !== '' ? ' (' . $username . ')' : '') . '.';
         }
     } elseif ($action === 'load_template') {
         $form['username'] = trim((string)($_POST['username'] ?? ''));
@@ -326,9 +323,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $authorized) {
                     $adminWarnings[] = 'Discourse 分类 ID ' . $categoryId . ' 无法访问，请核对 ID。';
                 }
                 if ($runDryRunAfterSave) {
-                    $workerResult = admin_invoke_topic_worker(array('dry_run' => '1', 'category_id' => $categoryId), $key, 360);
-                    $workerSummary = admin_worker_summary(is_array($workerResult['json'] ?? null) ? $workerResult['json'] : array());
-                    $message .= ' Dry-run 已完成。';
+                    $dryRunUrl = konvo_bot_registry_dry_run_url($categoryId, $key);
+                    $message .= ' 请在新标签页打开 Dry-run 链接查看完整 JSON（含 primary_error）。';
                 }
             }
 
@@ -420,7 +416,7 @@ $bots = konvo_bot_registry_load();
           <button type="submit">Ping Worker</button>
         </form>
       </div>
-      <p class="muted">Ping 会检查 LLM key、pipeline 版本、SOUL 文件是否存在（约 1 秒）。Dry-run / 发帖约 30–120 秒。</p>
+      <p class="muted">Ping 会检查 LLM key、pipeline 版本、SOUL 文件是否存在（约 1 秒）。Dry-run / 发帖请用下方<strong>新标签页链接</strong>直接打开 worker（长文 bot 约 1–3 分钟，避免 Admin 页 504）。</p>
     </div>
 
     <?php if ($message !== ''): ?><div class="ok"><?= h($message) ?></div><?php endif; ?>
@@ -508,7 +504,7 @@ $bots = konvo_bot_registry_load();
           <button type="submit" class="btn-primary" onclick="document.getElementById('bot-admin-action').value='upsert'">Save Bot</button>
           <label class="muted" style="display:inline-flex;align-items:center;gap:6px;margin:0;">
             <input type="checkbox" name="run_dry_run_after_save" value="1" style="width:auto;">
-            保存后立即 Dry-run
+            保存后显示 Dry-run 链接
           </label>
         </div>
       </form>
@@ -526,6 +522,7 @@ $bots = konvo_bot_registry_load();
             $soulKey = (string)($b['soul_key'] ?? konvo_bot_registry_slugify($uname));
             $catId = (int)($b['category_id'] ?? 0);
             $testUrl = konvo_bot_registry_dry_run_url($catId, $key);
+            $postUrl = konvo_bot_registry_post_url($catId, $key);
             $soulOk = is_file(soul_file_path($soulKey));
           ?>
             <tr>
@@ -536,20 +533,8 @@ $bots = konvo_bot_registry_load();
               <td>
                 <div class="actions">
                   <a class="btn" href="?key=<?= h($key) ?>&edit=<?= h($uname) ?>">Edit</a>
-                  <form method="post">
-                    <input type="hidden" name="key" value="<?= h($key) ?>">
-                    <input type="hidden" name="action" value="worker_dry_run">
-                    <input type="hidden" name="category_id" value="<?= h((string)$catId) ?>">
-                    <input type="hidden" name="username" value="<?= h($uname) ?>">
-                    <button type="submit">Dry-run</button>
-                  </form>
-                  <form method="post" onsubmit="return confirm('确定要真正发帖到 Discourse 吗？');">
-                    <input type="hidden" name="key" value="<?= h($key) ?>">
-                    <input type="hidden" name="action" value="worker_post">
-                    <input type="hidden" name="category_id" value="<?= h((string)$catId) ?>">
-                    <input type="hidden" name="username" value="<?= h($uname) ?>">
-                    <button type="submit">发帖</button>
-                  </form>
+                  <a class="btn" href="<?= h($testUrl) ?>" target="_blank" rel="noopener">Dry-run</a>
+                  <a class="btn" href="<?= h($postUrl) ?>" target="_blank" rel="noopener" onclick="return confirm('确定要真正发帖到 Discourse 吗？');">发帖</a>
                   <form method="post" onsubmit="return confirm('Delete this bot?');">
                     <input type="hidden" name="key" value="<?= h($key) ?>">
                     <input type="hidden" name="action" value="delete">

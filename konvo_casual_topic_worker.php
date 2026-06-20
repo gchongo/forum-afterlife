@@ -34,7 +34,7 @@ if (!function_exists('konvo_model_for_task')) {
     }
 }
 
-if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-pipeline-v15.5');
+if (!defined('KONVO_WORKER_BUILD')) define('KONVO_WORKER_BUILD', '2026-06-20-pipeline-v15.6');
 if (!defined('KONVO_BASE_URL')) define('KONVO_BASE_URL', 'https://www.howhy.day');
 if (!defined('KONVO_API_KEY')) define('KONVO_API_KEY', trim((string)getenv('DISCOURSE_API_KEY')));
 if (!defined('KONVO_DISCOURSE_API_USERNAME')) {
@@ -1594,16 +1594,22 @@ $generated = null;
 $extraAvoidance = '';
 $topicModeRun = !empty($soulRulesRun['news_bulletin'])
     ? 'news_bulletin'
-    : (konvo_soul_two_stage_enabled($soulRulesRun) ? 'two_stage_pipeline' : (!empty($soulRulesRun['longform']) ? 'soul_longform' : 'soul'));
+    : (!empty($soulRulesRun['tech_frontier'])
+        ? 'tech_frontier'
+        : (konvo_soul_two_stage_enabled($soulRulesRun) ? 'two_stage_pipeline' : (!empty($soulRulesRun['longform']) ? 'soul_longform' : 'soul')));
 $requestStartTs = isset($_SERVER['REQUEST_TIME_FLOAT']) ? (float)$_SERVER['REQUEST_TIME_FLOAT'] : microtime(true);
 $fastMode = (bool)KONVO_TOPIC_FAST_MODE;
 $maxAttempts = $fastMode ? 2 : 3;
-$requestBudget = !empty($soulRulesRun['news_bulletin'])
+$requestBudget = !empty($soulRulesRun['news_bulletin']) || !empty($soulRulesRun['tech_frontier'])
     ? 95.0
     : (!empty($soulRulesRun['longform']) ? 360.0 : 55.0);
 
 for ($i = 0; $i < $maxAttempts; $i++) {
     if ((microtime(true) - $requestStartTs) > $requestBudget) {
+        $attempts[] = array(
+            'ok' => false,
+            'error' => 'request budget exceeded (limit ' . round($requestBudget, 1) . 's, elapsed ' . round(microtime(true) - $requestStartTs, 1) . 's)',
+        );
         break;
     }
     $strict = $i > 0;
@@ -1683,7 +1689,9 @@ if (!is_array($generated) || empty($generated['ok'])) {
         'elapsed_seconds' => round(microtime(true) - $requestStartTs, 2),
         'hint' => !empty($soulRulesRun['news_bulletin'])
             ? 'News bulletin mode: single-shot 号外, no 500-char pipeline. Check primary_error. Optional: &seed_topic=今日某新闻标题'
-            : 'Pipeline v15: two-stage generate → prepare → validate_hard → fact_judge → dup → post. Set KONVO_TOPIC_TWO_STAGE=0 to disable.',
+            : (!empty($soulRulesRun['tech_frontier'])
+                ? 'Tech frontier mode: single-shot short post. Check primary_error. Optional: &seed_topic=某技术话题'
+                : 'Pipeline v15: two-stage generate → prepare → validate_hard → fact_judge → dup → post. Set KONVO_TOPIC_TWO_STAGE=0 to disable.'),
     ));
 }
 
