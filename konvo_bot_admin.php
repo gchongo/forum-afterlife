@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 if (!defined('KONVO_BOT_ADMIN_BUILD')) {
-    define('KONVO_BOT_ADMIN_BUILD', '2026-06-20-admin-v2');
+    define('KONVO_BOT_ADMIN_BUILD', '2026-06-20-admin-v2.1');
 }
 
 require_once __DIR__ . '/konvo_bot_registry.php';
@@ -32,12 +32,6 @@ function read_soul(string $soulKey): string
     }
     $raw = file_get_contents($path);
     return is_string($raw) ? trim($raw) : '';
-}
-
-function write_soul(string $soulKey, string $content): bool
-{
-    $path = soul_file_path($soulKey);
-    return @file_put_contents($path, $content) !== false;
 }
 
 function write_soul(string $soulKey, string $content): bool
