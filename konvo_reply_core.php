@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/kirupa_article_helper.php';
 
+$konvoBotRegistry = __DIR__ . '/konvo_bot_registry.php';
+if (is_file($konvoBotRegistry)) {
+    require_once $konvoBotRegistry;
+}
+
 $konvoModelRouter = __DIR__ . '/konvo_model_router.php';
 if (is_file($konvoModelRouter)) {
     require_once $konvoModelRouter;
@@ -257,14 +262,38 @@ function konvo_should_append_signature(): bool
     return false;
 }
 
+function konvo_legacy_bot_usernames(): array
+{
+    return array(
+        'baymax', 'kirupabot', 'vaultboy', 'mechaprime', 'yoshiii', 'bobamilk',
+        'wafflefries', 'quelly', 'sora', 'sarah_connor', 'ellen1979', 'arthurdent', 'hariseldon',
+    );
+}
+
+function konvo_all_known_bot_usernames(): array
+{
+    $merged = konvo_legacy_bot_usernames();
+    if (function_exists('konvo_bot_registry_usernames')) {
+        $merged = array_merge($merged, konvo_bot_registry_usernames(false));
+    } else {
+        $merged = array_merge($merged, array('higuyer', 'BAI', 'bai', 'Enjoylife', 'enjoylife'));
+    }
+    $seen = array();
+    $out = array();
+    foreach ($merged as $name) {
+        $key = strtolower(trim((string)$name));
+        if ($key === '' || isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $out[] = (string)$name;
+    }
+    return $out;
+}
+
 function konvo_all_bot_signature_aliases(): array
 {
-    return [
-        'baymax', 'kirupabot', 'kirupaBot', 'vaultboy', 'VaultBoy', 'mechaprime', 'MechaPrime',
-        'yoshiii', 'Yoshiii', 'bobamilk', 'BobaMilk', 'wafflefries', 'WaffleFries',
-        'quelly', 'Quelly', 'sora', 'Sora', 'sarah_connor', 'Sarah', 'ellen1979', 'Ellen',
-        'arthurdent', 'Arthur', 'hariseldon', 'Hari', 'higuyer', 'BAI', 'bai', 'Enjoylife', 'enjoylife',
-    ];
+    return konvo_all_known_bot_usernames();
 }
 
 function konvo_reply_state_dir(): string
@@ -954,13 +983,15 @@ function konvo_output_looks_sensitive(string $text): bool
 
 function konvo_get_tracked_bots_in_topic(array $topicData): array
 {
-    $tracked = ['BayMax', 'kirupaBot', 'vaultboy', 'mechaprime', 'yoshiii', 'bobamilk', 'wafflefries', 'quelly', 'sora', 'sarah_connor', 'ellen1979', 'arthurdent', 'hariseldon', 'higuyer', 'BAI', 'Enjoylife'];
-    $trackedLower = array_map('strtolower', $tracked);
-    $present = [];
+    $trackedLower = array();
+    foreach (konvo_all_known_bot_usernames() as $name) {
+        $trackedLower[strtolower(trim($name))] = true;
+    }
+    $present = array();
     $posts = $topicData['post_stream']['posts'] ?? [];
     foreach ($posts as $post) {
         $username = (string)($post['username'] ?? '');
-        if (in_array(strtolower($username), $trackedLower, true) && !in_array($username, $present, true)) {
+        if ($username !== '' && isset($trackedLower[strtolower($username)]) && !in_array($username, $present, true)) {
             $present[] = $username;
         }
     }
@@ -971,8 +1002,13 @@ function konvo_is_known_bot_username(string $username): bool
 {
     static $botSet = null;
     if ($botSet === null) {
-        $bots = ['baymax', 'kirupabot', 'vaultboy', 'mechaprime', 'yoshiii', 'bobamilk', 'wafflefries', 'quelly', 'sora', 'sarah_connor', 'ellen1979', 'arthurdent', 'hariseldon', 'higuyer', 'bai', 'enjoylife'];
-        $botSet = array_fill_keys($bots, true);
+        $botSet = array();
+        foreach (konvo_all_known_bot_usernames() as $name) {
+            $key = strtolower(trim($name));
+            if ($key !== '') {
+                $botSet[$key] = true;
+            }
+        }
     }
     $u = strtolower(trim($username));
     return $u !== '' && isset($botSet[$u]);
